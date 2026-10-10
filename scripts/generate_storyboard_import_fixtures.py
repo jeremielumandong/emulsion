@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Self-authored layer-transport fixtures, independent of Emulsion export policy.
 
-Requires the existing psd-tools 1.23.0 and Pillow. These are not Photoshop
-rendering references. All source pixels are solid, synthetic colors below.
+Requires the existing psd-tools 1.23.0 and Pillow. These are not
+third-party rendering references. All source pixels are solid, synthetic colors below.
 """
 from pathlib import Path
 import hashlib,json
@@ -29,7 +29,7 @@ def main():
  result=[]
  for name,size,layers in CASES:
   psd=PSDImage.new('RGBA',size)
-  # Optional VersionInfo is absent: the psd-tools preview is not an Adobe
+  # Optional VersionInfo is absent: the psd-tools preview is not a
   # compatibility/gamma oracle. Tests exercise transport of editable layers.
   del psd.image_resources[Resource.VERSION_INFO]
   for label,rgba,blend,clip in layers:
@@ -42,6 +42,6 @@ def main():
    assert layer.topil(apply_icc=False).getpixel((0,0))==rgba
   result.append({'file':name,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'size':size,
                  'layers':[{'name':n,'rgba8':rgba,'blend':b.name,'clipped':c} for n,rgba,b,c in layers]})
- (OUT/'manifest.json').write_text(json.dumps({'producer':'psd-tools 1.23.0','authorship':'Self-authored synthetic Emulsion test artwork; no Photoshop application used','cases':result},indent=2)+'\n')
+ (OUT/'manifest.json').write_text(json.dumps({'producer':'psd-tools 1.23.0','authorship':'Self-authored synthetic Emulsion test artwork; no third-party editor used','cases':result},indent=2)+'\n')
  print(json.dumps(result,indent=2))
 if __name__=='__main__':main()

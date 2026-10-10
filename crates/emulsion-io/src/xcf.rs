@@ -1,8 +1,8 @@
-//! GIMP's native XCF through `xcf-rs`, both ways. Reading: every 8-bit
+//! Native XCF through `xcf-rs`, both ways. Reading: every 8-bit
 //! RGB/RGBA layer with its name, offset, opacity and visibility becomes a
 //! pixel layer. Writing: every visible top-level layer is rendered by itself
 //! (adjustments, text, paths and styles baked in) and stored as an 8-bit
-//! RGBA layer with its name and opacity, so GIMP opens the picture layered. Greyscale,
+//! RGBA layer with its name and opacity, so XCF readers open the picture layered. Greyscale,
 //! indexed and high-precision files, layer masks and groups are beyond the
 //! crate; those fall back to a flattened import through an installed
 //! converter (see `external`).
@@ -20,7 +20,7 @@ pub fn is_xcf(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("xcf"))
 }
 
-/// Layer facts GIMP stores as a property list.
+/// Layer facts XCF stores as a property list.
 struct Props {
     offset: (i32, i32),
     opacity: f32,
@@ -138,15 +138,15 @@ fn props(layer: &xcf_rs::data::layer::Layer) -> Props {
 /// Read `path` as a layered document.
 pub fn read(path: &Path) -> Result<Document> {
     // The crate panics on property ids it has no name for (files from a
-    // GIMP newer than it knows); a panic here is just "unsupported".
+    // newer XCF writer than it knows); a panic here is just "unsupported".
     let xcf = std::panic::catch_unwind(|| xcf_rs::data::xcf::Xcf::open(path))
-        .map_err(|_| IoError::Unsupported("XCF: unknown property (newer GIMP?)".into()))?
+        .map_err(|_| IoError::Unsupported("XCF: unknown property (newer XCF version?)".into()))?
         .map_err(|e| IoError::Unsupported(format!("XCF: {e:?}")))?;
     let (w, h) = (xcf.header.width, xcf.header.height);
     crate::import::check_size(w, h)?;
     let mut doc = Document::new(w, h);
     doc.source_depth = 8;
-    // GIMP lists layers top to bottom; the stack wants bottom first.
+    // XCF lists layers top to bottom; the stack wants bottom first.
     for (i, layer) in xcf.layers.iter().enumerate().rev() {
         let (lw, lh) = layer.dimensions();
         if lw == 0 || lh == 0 {
@@ -195,7 +195,7 @@ pub fn read(path: &Path) -> Result<Document> {
     Ok(doc)
 }
 
-/// Write `doc` as a layered 8-bit XCF (GIMP 2.10+ format, version 11).
+/// Write `doc` as a layered 8-bit XCF (XCF format version 11).
 /// Hidden layers are left out, since the writer cannot mark them hidden.
 pub fn write(doc: &Document, path: &Path) -> Result<()> {
     doc.validate()?;
@@ -237,7 +237,7 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
     let (w, h) = (doc.width, doc.height);
     let mut xcf = XcfCreator::new(11, w, h, ColorType::Rgb);
     xcf.add_properties(&vec![]);
-    // GIMP stores the top layer first.
+    // XCF stores the top layer first.
     let mut layers = Vec::new();
     for id in doc.children(None).into_iter().rev() {
         let Some(n) = doc.node(id) else { continue };

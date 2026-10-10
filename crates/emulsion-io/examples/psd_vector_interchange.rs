@@ -5,7 +5,7 @@
 //! python3 scripts/verify_psd_density_interchange.py NEW_DIRECTORY/density-boundaries
 //!
 //! Fresh independent geometry is checked separately from the saved composite.
-//! These fixtures do not establish Adobe-application or feather-kernel parity.
+//! These fixtures do not establish third-party-application or feather-kernel parity.
 
 use emulsion_core::{
     Command, Document, EmptyVectorCoverage, MaskProperties, Node, NodeKind, VectorMask,

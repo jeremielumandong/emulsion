@@ -192,7 +192,7 @@ impl EditorView {
         cx.notify();
     }
 
-    /// Photoshop's Tab: hide or show the panel dock.
+    /// Tab: hide or show the panel dock.
     pub(crate) fn toggle_panel_dock(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.finish_mask_properties();
         let show = !self.sidebar_content_visible(window, cx);
@@ -201,7 +201,7 @@ impl EditorView {
         cx.notify();
     }
 
-    /// Photoshop's F7: the Layers panel.
+    /// F7: the Layers panel.
     pub(crate) fn show_layers_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_dock_tab(DockTab::Layers, window, cx)
     }
@@ -217,12 +217,12 @@ impl EditorView {
         cx.notify();
     }
 
-    /// Photoshop's F8: the Info panel.
+    /// F8: the Info panel.
     pub(crate) fn show_info_panel(&mut self, cx: &mut Context<Self>) {
         self.show_sidebar_tab(SidebarTab::Info, cx)
     }
 
-    /// Photoshop's F5: the Brush Settings panel.
+    /// F5: the Brush Settings panel.
     pub(crate) fn show_brush_settings(&mut self, cx: &mut Context<Self>) {
         self.show_sidebar_tab(SidebarTab::BrushSettings, cx)
     }
@@ -512,7 +512,7 @@ impl EditorView {
                             )
                     }),
                 )
-                // Photoshop's collapsed dock lists the Layers group too.
+                // The collapsed dock lists the Layers group too.
                 .child(div().h(px(1.)).mx_1().my_1().bg(p.line))
                 .children(
                     [

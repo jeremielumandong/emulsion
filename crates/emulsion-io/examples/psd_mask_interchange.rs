@@ -3,7 +3,7 @@
 //! cargo run -p emulsion-io --example psd_mask_interchange -- NEW_OUTPUT_DIRECTORY
 //! python3 scripts/verify-psd-raster-masks.py NEW_OUTPUT_DIRECTORY
 //!
-//! The independent verifier checks stored records, not Photoshop rendering parity.
+//! The independent verifier checks stored records, not third-party rendering parity.
 
 use emulsion_core::{Command, Document, MaskProperties, Node, NodeKind, command::Slot};
 use emulsion_raster::{Mask, Placement, Raster, composite::flatten};
@@ -329,7 +329,7 @@ fn main() -> Result<()> {
     emulsion_io::ora::write(&baked, &out.join("baked-mask-source.ora"))?;
     let manifest = json!({
         "schema": 1,
-        "description": "Editable raster mask records; no Photoshop or feather-kernel parity claim",
+        "description": "Editable raster mask records; no third-party rendering or feather-kernel parity claim",
         "canvas": [doc.width, doc.height],
         "native": "editable-source.ora",
         "composite": {"png": "native-composite.png", "mode": "RGBA", "sha256": sha256(&composite), "size": [doc.width, doc.height]},

@@ -152,8 +152,8 @@ support full-size viewing; the remaining film placeholders stay explicit.
   `crates/emulsion-ui/src/batch/advanced.rs` (`library_preset_bank`) and panel
   placement against `crates/emulsion-ui/src/batch/layout.rs`.
 - Checked supported preset formats and compatibility limits against
-  `docs/guides/library-develop.md`, “Lightroom and VSCO interoperability”. The
-  copy does not promise exact reproduction of proprietary Lightroom/VSCO looks.
+  `docs/guides/library-develop.md`, in its preset interoperability section. The
+  copy does not promise exact reproduction of proprietary third-party looks.
 
 
 ## Design poster capture — September 30, 2026

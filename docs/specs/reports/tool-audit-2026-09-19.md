@@ -62,7 +62,7 @@ Evidence: [tools.rs](../../../crates/emulsion-ui/src/editor/tools.rs), lines 164
 
 Adjustment layers are rendered with their underlying layers hidden and therefore export transparent results. Clipping relationships and group masks are omitted. The stored merged image can look correct while reconstruction from editable layers is wrong. Exporting a gray raster with Exposure, or clipped pixels inside a masked group, demonstrates separate losses. Preserve supported PSD constructs and explicitly handle unsupported ones with an appearance-preserving export strategy.
 
-Evidence: [psd.rs](../../../crates/emulsion-io/src/psd.rs), lines 256, 344, 399. Ordinary raster layer export also bypasses Emulsion styles. Editable text, native adjustment definitions, and Smart objects are not preserved as their corresponding Photoshop objects.
+Evidence: [psd.rs](../../../crates/emulsion-io/src/psd.rs), lines 256, 344, 399. Ordinary raster layer export also bypasses Emulsion styles. Editable text, native adjustment definitions, and Smart objects are not preserved as their corresponding PSD objects.
 
 ### Other defects and gaps
 
@@ -97,7 +97,7 @@ Except where the validation section records execution, these additional findings
 | Brush / pencil | Opacity/flow, hardness, spacing, roundness/angle, pressure response, textures, grain, wet mixing, taper, jitter, stabilization | Real implementation. Mac hardware pressure/tilt absent; alpha lock, presets, and transformed symmetry defective. Artistic quality unmeasured. |
 | Eraser | Brush-driven erasing, selection clipping, own settings slot | Basic paths covered; fractional alpha lock and preset switching need repair. |
 | Smudge | Brush-driven color mixing, backdrop sampling | Implemented; complex transparency and large-canvas responsiveness need manual evaluation. |
-| Brush library / drawing aids | Categorized presets, custom brushes, partial Procreate brush import, symmetry, grid/isometric/perspective assistance, hold-to-snap QuickShape | Imported brushes approximate supported fields. No ABR import, dual brush, physical eraser-tip routing, or stationary time-based spray found. Symmetry centers are fixed. |
+| Brush library / drawing aids | Categorized presets, custom brushes, partial `.brushset` brush import, symmetry, grid/isometric/perspective assistance, hold-to-snap QuickShape | Imported brushes approximate supported fields. No ABR import, dual brush, physical eraser-tip routing, or stationary time-based spray found. Symmetry centers are fixed. |
 | Bucket / gradient | Flood/color fill, selected fill, linear/radial gradients | Async fill stale-result risk. Gradients are rasterized rather than editable multi-stop gradient objects. |
 | Liquify | Push, twirl, pinch, expand, Restore | Engine exists; selection enforcement and UI Restore are broken. |
 | Heal | Content-aware spot healing | Selection bypass and stale-result/transaction issues. No source-sampled healing brush equivalent found. |
@@ -131,7 +131,7 @@ The `emulsion-tools`, `emulsion-color`, and `emulsion-gpu` crates are stubs, but
 - Real Mac tablet pressure/tilt, hover, eraser tip, hotplug; Linux device permissions and sample freshness.
 - Stroke feel at different speeds, zoom levels, and event rates; dry/wet brushes over translucent multilayer content.
 - Long documents and large brushes: input-to-mark latency, frame time, memory, worker cancellation, save/autosave recovery.
-- Opening exported files in actual Photoshop, Procreate, and an independent ORA reader. Automated Emulsion reimports do not certify those applications.
+- Opening exported files in actual third-party PSD and `.brushset` applications, and an independent ORA reader. Automated Emulsion reimports do not certify those applications.
 - Third-party fonts and real brush libraries; imported preset persistence across relaunch.
 - Live generation providers and installed AI models. Quota/access failures are distinct from local tool correctness.
 

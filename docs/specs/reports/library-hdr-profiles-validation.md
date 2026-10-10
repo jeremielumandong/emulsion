@@ -35,7 +35,7 @@ and 24 megapixels per exposure. RGB import assumes linearized sRGB rather than
 estimating a camera response. Alignment estimates translation only; deghosting uses
 one reference and cannot reconstruct every moving/clipped region. Reduced-resolution
 previews can differ from full-resolution alignment and deghosting. No equivalence to
-Adobe's rendering engine or proprietary plug-ins is claimed.
+any third-party rendering engine or proprietary plug-ins is claimed.
 
 `merge_library_hdr` provides a PNG preview or a new output file plus catalog insertion.
 `cancel_library_hdr` remains callable during processing. `get_library` exposes HDR

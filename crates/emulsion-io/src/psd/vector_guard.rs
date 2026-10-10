@@ -73,7 +73,7 @@ pub(super) fn reason(bytes: &[u8]) -> Result<Option<&'static str>> {
                 for number in record[2..].as_chunks::<4>().0 {
                     let value = i32::from_be_bytes(*number);
                     if !(-(16 << 24)..(16 << 24)).contains(&value) {
-                        reason = reason.or(Some("vector-mask coordinate exceeds Adobe path range"));
+                        reason = reason.or(Some("vector-mask coordinate exceeds PSD path range"));
                     }
                 }
             }

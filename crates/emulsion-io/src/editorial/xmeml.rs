@@ -1,5 +1,5 @@
-//! Final Cut Pro 7 XML (xmeml version 5), which Premiere Pro, DaVinci
-//! Resolve and Avid Media Composer also read: one sequence with the panel
+//! XML edit list (xmeml version 5), the XML interchange most editing
+//! software reads: one sequence with the panel
 //! track and any reference video tracks, sound tracks with each clip's
 //! gain as an Audio Levels filter, transitions starting at their cuts, and
 //! sequence markers. Read back with the shared bounded XML reader.
@@ -294,7 +294,7 @@ enum Item<'a> {
 pub fn read(text: &str) -> Result<Edit> {
     let root = xml::parse(&without_doctype(text)?)?;
     if root.name != "xmeml" {
-        bail!("This is not a Final Cut Pro XML file")
+        bail!("This is not an xmeml XML edit list")
     }
     let sequence = root
         .descendants("sequence")

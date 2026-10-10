@@ -121,5 +121,5 @@ Focused regression suites include `vector_mask_tests`, `vector_geometry_tests`,
 independent masks with styles, clipping, and reload. GPU tests only count as
 verified when an adapter ran; use `EMULSION_REQUIRE_GPU_TESTS=1` for that gate.
 Native Pen/target/property/transform workflows and save/reopen require separate
-serial UI/native validation. These contracts do not claim Photoshop-identical
+serial UI/native validation. These contracts do not claim reference-application-identical
 antialiasing, blur kernels, or complete feature parity.

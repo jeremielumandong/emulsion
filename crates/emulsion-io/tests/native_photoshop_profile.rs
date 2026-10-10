@@ -279,7 +279,7 @@ fn malformed_downgraded_history_cannot_drop_hidden_new_features() {
         reject_manifest_both(
             &path,
             &[
-                "Photoshop compositing or Invert state requires native and existing history version 14",
+                "PSD-compatible compositing or Invert state requires native and existing history version 14",
             ],
         );
     }

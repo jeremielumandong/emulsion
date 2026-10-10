@@ -71,7 +71,7 @@ pub struct Document {
     /// title bar and export defaults. Storage is always 16-bit linear.
     pub source_depth: u8,
     pub blend_space: BlendSpace,
-    /// Explicit Photoshop Background identity. Never inferred from layer appearance.
+    /// Explicit PSD Background identity. Never inferred from layer appearance.
     pub psd_background: Option<NodeId>,
     /// Bottom to top.
     pub nodes: Vec<Node>,
@@ -456,7 +456,7 @@ impl Document {
         if let Some(id) = self.psd_background
             && !self.valid_psd_background(id)
         {
-            return Err(DocumentError::BadValue(id, "Photoshop Background target"));
+            return Err(DocumentError::BadValue(id, "PSD Background target"));
         }
         if self.raw_originals.len() > 1024
             || self

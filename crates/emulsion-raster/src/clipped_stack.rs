@@ -68,7 +68,7 @@ fn stack_has_knockout(nodes: &[CompositeNode], roots: &[Option<usize>], base: us
 /// A capability diagnostic for the viewport. CPU fallback fixes ordinary
 /// contiguous pixel/fill/isolated-group stacks; other combinations retain their
 /// existing rendering until their shape/appearance contract is established.
-/// This is intentionally explicit rather than advertising full Photoshop parity.
+/// This is intentionally explicit rather than advertising full PSD parity.
 pub fn grouped_clipping_fallback_reason(nodes: &[CompositeNode]) -> Option<&'static str> {
     let mut roots = vec![None; nodes.len()];
     let mut grouped = vec![false; nodes.len()];

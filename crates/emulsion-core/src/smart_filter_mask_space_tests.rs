@@ -1,4 +1,4 @@
-//! RGB-space correction only. The independent Photoshop target is a rasterized
+//! RGB-space correction only. The independent PSD-authored target is a rasterized
 //! pixel layer, never a saved merged preview or the unmasked filtered cache.
 use crate::mapping::{Mapping2, SmartPlacement};
 use crate::smart_filter_mask::{effective_pixels, effective_pixels_with_space};
@@ -23,14 +23,14 @@ fn fixture() -> Document {
     doc.blend_space = BlendSpace::PhotoshopSrgbV1;
     doc.nodes.push(Node::new(
         1,
-        "Independent Photoshop stack-mask inputs",
+        "Independent PSD stack-mask inputs",
         NodeKind::Smart {
             filters_enabled: true,
             editable: None,
             original_image: None,
             // This is the placed FEid pre-filter cache, NOT the embedded PNG
             // editable source. Injecting it isolates the mask operation from
-            // Photoshop's Gaussian kernel and nonuniform source resampling.
+            // the authoring editor's Gaussian kernel and nonuniform source resampling.
             source: Arc::new(Raster::from_srgba8(40, 40, SOURCE)),
             cache: Arc::new(Raster::from_srgba8(40, 40, FILTERED)),
             filters: vec![Filter::GaussianBlur { radius: 4.5 }],

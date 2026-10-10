@@ -1,4 +1,4 @@
-//! Enhance: one-click photo tools in the spirit of Luminar. Every tool lands
+//! Enhance: one-click photo tools. Every tool lands
 //! as ordinary editable content — a smart filter on the photo, or model-made
 //! layers with masks — so undo, Properties and the assistant see nothing
 //! special. The panel then shows each active tool's sliders in place.

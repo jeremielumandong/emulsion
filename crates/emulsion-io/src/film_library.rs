@@ -1,4 +1,4 @@
-//! Built-in film and creative preset library: 451 Adobe Camera Raw presets from
+//! Built-in film and creative preset library: 451 XMP develop (crs) presets from
 //! peva3/Lightroom-Presets (MIT), embedded so they work offline and in the agent.
 //! Regenerate the index with `scripts/sync-film-presets.py`.
 use crate::{Result, lightroom_presets};
@@ -177,7 +177,7 @@ mod tests {
                 [
                     // Vignette shape details and lens-profile toggles.
                     "Other adjustments not applied",
-                    "Adobe Vivid profile approximated with extra contrast and saturation",
+                    "Vivid base profile approximated with extra contrast and saturation",
                 ]
                 .contains(&group.as_str()),
                 "unexpected unsupported group {group}: {unsupported:?}"

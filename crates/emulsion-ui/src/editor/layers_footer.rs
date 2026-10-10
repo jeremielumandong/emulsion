@@ -1,4 +1,4 @@
-//! Photoshop-style Layers panel footer: link, layer style, mask, fill or
+//! The conventional Layers panel footer: link, layer style, mask, fill or
 //! adjustment layer, group, new layer and delete.
 use super::layer_menu::item;
 use super::*;
@@ -7,7 +7,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::component::{Disableable, Sizable};
 
-/// The fx menu, in Photoshop's order: (effect key, catalog key).
+/// The fx menu, in the conventional order: (effect key, catalog key).
 const EFFECTS: [(&str, &str); 10] = [
     ("drop_shadow", "editor.layers_footer.drop_shadow"),
     ("inner_shadow", "editor.layers_footer.inner_shadow"),
@@ -169,7 +169,7 @@ impl EditorView {
                     })),
             )
             .child(
-                // Dropping a layer here duplicates it, as in Photoshop.
+                // Dropping a layer here duplicates it, the conventional behaviour.
                 div()
                     .id("layers-new-drop")
                     .rounded_sm()

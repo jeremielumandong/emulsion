@@ -1,4 +1,4 @@
-//! Fixed Photoshop controls and separately labelled analytic native contracts.
+//! Fixed PSD reference controls and separately labelled analytic native contracts.
 //! Expected pixels are literals or independent f64 IEC transfer calculations,
 //! never rendered with a second production blend path to manufacture an oracle.
 
@@ -915,7 +915,7 @@ fn styled_knockout_encloses_extending_effect_and_fractional_authored_mask() {
     // A real lowered Multiply shadow extends one pixel beyond each side of a
     // one-pixel blue Raster. Its 128/255 authored mask is smaller than the
     // completed appearance alpha when effects are not hidden by that mask.
-    // This is an explicit native one-envelope contract, not a Photoshop oracle.
+    // This is an explicit native one-envelope contract, not a PSD reference oracle.
     for shadow_alpha in [0.75, 1.0] {
         for hides_effects in [false, true] {
             let mut background = wide_background(GREEN);

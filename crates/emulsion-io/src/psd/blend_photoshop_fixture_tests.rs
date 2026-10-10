@@ -1,8 +1,8 @@
-//! Independent Photoshop metadata evidence, not a native-rendering golden.
+//! Independent third-party PSD metadata evidence, not a native-rendering golden.
 //!
 //! The untouched upstream fixture uses four active Gray/R/G/B gates and must
 //! remain unsupported by our one-gate model. Byte-edited single-gate variants
-//! below only check channel mapping; Photoshop did not render those variants.
+//! below only check channel mapping; the authoring app did not render those variants.
 
 use super::blend_metadata;
 use ag_psd::psd::{ColorMode, LayerAdditionalInfo, Psd, ReadOptions};

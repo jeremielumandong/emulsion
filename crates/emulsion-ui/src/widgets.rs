@@ -268,7 +268,7 @@ pub fn slider(
         )
 }
 
-/// A vertical slider (Procreate's side sliders): full height of its box,
+/// A vertical slider (tablet-style side sliders): full height of its box,
 /// filled from the bottom. `value` is the normalised position in [0,1].
 pub fn vslider(
     id: impl Into<ElementId>,

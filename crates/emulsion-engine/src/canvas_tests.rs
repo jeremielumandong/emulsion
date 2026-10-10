@@ -890,7 +890,7 @@ fn photoshop_profile_is_a_permanent_gpu_capability_refusal() {
     assert!(error.is::<UnsupportedBlendSpace>());
     assert_eq!(
         error.to_string(),
-        "Photoshop sRGB v1 requires CPU rendering"
+        "PSD-compatible sRGB v1 requires CPU rendering"
     );
     let mut doc = emulsion_core::diagram_library::TEMPLATES[0]
         .build()

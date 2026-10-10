@@ -73,7 +73,7 @@ pub fn describe(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> 
         "working_space":if raw.params.wide_gamut {"linear ProPhoto RGB"} else {"linear sRGB"}, "white_balance_units":"relative offsets, not Kelvin",
         "neutral_picker_coordinates":"oriented/cropped RAW raster pixels, before layer transforms",
         "curve_presets":{"linear":DevelopParams::LINEAR_CURVE,"medium":DevelopParams::MEDIUM_CONTRAST_CURVE,"strong":DevelopParams::STRONG_CONTRAST_CURVE},
-        "settings_format":"Emulsion JSON, not Adobe XMP", "original_preserved":true}).to_string()))
+        "settings_format":"Emulsion JSON, not XMP", "original_preserved":true}).to_string()))
 }
 fn planned(commands: Vec<Command>, message: impl Into<String>) -> Planned {
     Planned {
@@ -374,7 +374,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "raw_settings",
-            "Save/load Emulsion JSON sidecars or camera-aware presets; save/apply/reset camera-model defaults. Not Adobe XMP. Sidecars default beside original; presets require path. group applies only to loads/apply. Saves/default resets change disk, not undo history; existing matching settings may be replaced but images/unrelated files are protected.",
+            "Save/load Emulsion JSON sidecars or camera-aware presets; save/apply/reset camera-model defaults. Not XMP. Sidecars default beside original; presets require path. group applies only to loads/apply. Saves/default resets change disk, not undo history; existing matching settings may be replaced but images/unrelated files are protected.",
             json!({"action":{"type":"string","enum":["save_sidecar","load_sidecar","save_preset","load_preset","save_camera_defaults","apply_camera_defaults","reset_camera_defaults"]},"path":{"type":"string","minLength":1},"group":groups}),
             &["action"],
         ),

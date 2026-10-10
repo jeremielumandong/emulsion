@@ -1,6 +1,6 @@
 //! Editorial interchange: the animatic as an edit for editing software, and
 //! edits read back for conforming. Three formats share one neutral
-//! [`Edit`]: CMX 3600 EDL ([`edl`]), Final Cut Pro 7 XML ([`xmeml`]) and
+//! [`Edit`]: CMX 3600 EDL ([`edl`]), XML edit list ([`xmeml`]) and
 //! OpenTimelineIO ([`otio`]). Exports write each panel as a still or a
 //! short movie (rendered with the animatic renderer) and copy the sounds
 //! and reference videos into a media folder beside the edit, named so a
@@ -30,7 +30,7 @@ pub enum Format {
     /// CMX 3600 edit decision list.
     #[default]
     Edl,
-    /// Final Cut Pro 7 XML (xmeml), also read by Premiere Pro and Resolve.
+    /// XML edit list (xmeml), the XML interchange most editing software reads.
     Xmeml,
     /// OpenTimelineIO JSON.
     Otio,
@@ -48,7 +48,7 @@ impl Format {
     pub fn label(self) -> &'static str {
         match self {
             Self::Edl => "Edit Decision List (CMX 3600 .edl)",
-            Self::Xmeml => "Final Cut Pro 7 XML (.xml)",
+            Self::Xmeml => "XML edit list (xmeml .xml)",
             Self::Otio => "OpenTimelineIO (.otio)",
         }
     }
@@ -222,7 +222,7 @@ pub fn parse(text: &str, format: Format, rate: FrameRate) -> Result<Edit> {
 /// Read an edit file, its format from its extension.
 pub fn read(path: &Path, rate: FrameRate) -> Result<Edit> {
     let format = Format::from_path(path)
-        .context("Choose an EDL (.edl), Final Cut XML (.xml) or OpenTimelineIO (.otio) file")?;
+        .context("Choose an EDL (.edl), XML edit list (.xml) or OpenTimelineIO (.otio) file")?;
     let size = std::fs::metadata(path)
         .with_context(|| format!("Cannot read {}", path.display()))?
         .len();

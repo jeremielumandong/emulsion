@@ -1,4 +1,4 @@
-//! Lightroom-style local masking for the agent: subject, sky, background,
+//! Local masking for the agent: subject, sky, background,
 //! people (face, eyes, teeth), gradients, brush, colour and luminance ranges,
 //! combined with add/subtract/intersect/invert, plus the masking strategies
 //! retouchers use for colour control and guiding the eye.
@@ -1102,7 +1102,7 @@ pub fn definitions() -> Vec<ToolDef> {
     vec![
         def(
             "mask_raw",
-            "Add, update, remove or clear a local RAW mask, like Lightroom masking, in one undo step. A mask is a list of components combined in order: subject, background, sky, face, eyes, teeth (AI, with labelled approximations when a model is missing), all, radial, linear, brush, luminance range or color range, with add/subtract/intersect and invert. Each mask adjusts exposure, contrast, highlights, shadows, saturation, temperature and tint inside it. Coordinates are 0..1 of the cropped, rotated photo as get_view shows it (space=view), or of the uncropped original (space=source).",
+            "Add, update, remove or clear a local RAW mask in one undo step. A mask is a list of components combined in order: subject, background, sky, face, eyes, teeth (AI, with labelled approximations when a model is missing), all, radial, linear, brush, luminance range or color range, with add/subtract/intersect and invert. Each mask adjusts exposure, contrast, highlights, shadows, saturation, temperature and tint inside it. Coordinates are 0..1 of the cropped, rotated photo as get_view shows it (space=view), or of the uncropped original (space=source).",
             json!({"action":{"type":"string","enum":["add","update","remove","clear"]},"id":{"type":"integer","minimum":1},
                 "name":{"type":"string","minLength":1,"maxLength":200},"components":{"type":"array","minItems":1,"maxItems":16,"items":component},
                 "adjustments":adjustments,"enabled":{"type":"boolean"},"space":{"type":"string","enum":["view","source"],"default":"view"}}),

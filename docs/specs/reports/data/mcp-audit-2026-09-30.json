@@ -2417,7 +2417,7 @@
       "route": "document_or_catalog"
     },
     {
-      "description": "Crop the canvas to a rectangle, optionally straightening by rotating everything clockwise first. The rectangle may extend past the canvas to enlarge it. Layers move; they are never resampled. delete_pixels true also cuts unrotated pixel layers down to the canvas (Photoshop's delete cropped pixels); default false keeps them whole.",
+      "description": "Crop the canvas to a rectangle, optionally straightening by rotating everything clockwise first. The rectangle may extend past the canvas to enlarge it. Layers move; they are never resampled. delete_pixels true also cuts unrotated pixel layers down to the canvas (the conventional delete-cropped-pixels option); default false keeps them whole.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -2854,7 +2854,7 @@
       "route": "live_workspace"
     },
     {
-      "description": "Operate on the active Library photo using the same drafts, undo and sidecars as the UI. adjust patches settings; auto/reset/as_shot/undo/preset/load_preset save immediately and report failures. sync copies group to selected photos. save flushes all drafts. reload explicitly discards active unsaved draft. Built-in preset names: neutral,warm,black_and_white,strong_contrast. Imports Emulsion JSON, Lightroom XMP and legacy lrtemplate presets with a compatibility report. snapshot/restore_snapshot/delete_snapshot use a name; deletion preserves current edits and history; match_lens resolves a measured Lensfun profile; subject_mask/sky_mask create local bitmap masks (sky_mask requires point); auto_sky uses local semantic sky segmentation; auto_perspective estimates level and perspective from image lines; denoise/super_resolution create new rendered derivatives. sensor_noise_reduction is a RAW-only pre-demosaic control in settings. point_curves contains composite/red/green/blue control points. Sampled camera WB cannot be synced across Library files. RAW highlights is recovery: positive darkens, negative brightens; UI slider uses the opposite sign.",
+      "description": "Operate on the active Library photo using the same drafts, undo and sidecars as the UI. adjust patches settings; auto/reset/as_shot/undo/preset/load_preset save immediately and report failures. sync copies group to selected photos. save flushes all drafts. reload explicitly discards active unsaved draft. Built-in preset names: neutral,warm,black_and_white,strong_contrast. Imports Emulsion JSON, XMP and legacy lrtemplate presets with a compatibility report. snapshot/restore_snapshot/delete_snapshot use a name; deletion preserves current edits and history; match_lens resolves a measured Lensfun profile; subject_mask/sky_mask create local bitmap masks (sky_mask requires point); auto_sky uses local semantic sky segmentation; auto_perspective estimates level and perspective from image lines; denoise/super_resolution create new rendered derivatives. sensor_noise_reduction is a RAW-only pre-demosaic control in settings. point_curves contains composite/red/green/blue control points. Sampled camera WB cannot be synced across Library files. RAW highlights is recovery: positive darkens, negative brightens; UI slider uses the opposite sign.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -7512,7 +7512,7 @@
       "route": "live_workspace"
     },
     {
-      "description": "Add a recipe to the library from text (a pasted settings block or .recipe.toml), a file path (.recipe.toml, Lightroom .xmp, Fujifilm .FP1, text) or a web page URL (a recipe page, or an index page whose recipe links are all followed). Returns what was saved.",
+      "description": "Add a recipe to the library from text (a pasted settings block or .recipe.toml), a file path (.recipe.toml, XMP develop preset .xmp, Fujifilm .FP1, text) or a web page URL (a recipe page, or an index page whose recipe links are all followed). Returns what was saved.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -7947,7 +7947,7 @@
       "route": "document_or_catalog"
     },
     {
-      "description": "Photo catalog operations: smart_collection creates a live rule; stack/unstack use canonical paths; virtual_copy creates an independent recipe reference; backup/restore_backup use .emulibrary for a portable archive including photo originals, sidecars, presets and masks, or .json for catalog references; relink verifies identical original bytes and rewrites virtual references with their histories; import_lightroom reads .lrcat references, ratings, collections and supported readable histories, or an Adobe companion handoff JSON; import_presets installs XMP/lrtemplate/JSON/ZIP preset packs with compatibility warnings; save_export_preset/load_export_preset use a JSON path for the visible output settings.",
+      "description": "Photo catalog operations: smart_collection creates a live rule; stack/unstack use canonical paths; virtual_copy creates an independent recipe reference; backup/restore_backup use .emulibrary for a portable archive including photo originals, sidecars, presets and masks, or .json for catalog references; relink verifies identical original bytes and rewrites virtual references with their histories; import_lightroom reads .lrcat references, ratings, collections and supported readable histories, or a catalog companion handoff JSON; import_presets installs XMP/lrtemplate/JSON/ZIP preset packs with compatibility warnings; save_export_preset/load_export_preset use a JSON path for the visible output settings.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -10191,7 +10191,7 @@
       "route": "document_or_catalog"
     },
     {
-      "description": "Save/load Emulsion JSON sidecars or camera-aware presets; save/apply/reset camera-model defaults. Not Adobe XMP. Sidecars default beside original; presets require path. group applies only to loads/apply. Saves/default resets change disk, not undo history; existing matching settings may be replaced but images/unrelated files are protected.",
+      "description": "Save/load Emulsion JSON sidecars or camera-aware presets; save/apply/reset camera-model defaults. Not XMP. Sidecars default beside original; presets require path. group applies only to loads/apply. Saves/default resets change disk, not undo history; existing matching settings may be replaced but images/unrelated files are protected.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {

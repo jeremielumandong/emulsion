@@ -236,7 +236,7 @@ directly when the canvas or Layers panel has focus.
 | Component | Hue (U), Saturation (T), Color (C), Luminosity (Y) |
 | Groups only | Pass through |
 
-**Image → Blend space** chooses where blending runs: **Photoshop / sRGB** or
+**Image → Blend space** chooses where blending runs: **PSD-compatible sRGB** or
 **Linear light**.
 
 Layer Style's **Blend If** ranges include direct joined handles. Alt/Option-drag
@@ -253,7 +253,7 @@ select the layer below or above.
 ## Enhance panel
 
 **Enhance** in the panel tabs gathers one-click photo tools, similar to the
-AI tools in Luminar. Open the tab, click a tool, and move its sliders
+AI tools in other photo editors. Open the tab, click a tool, and move its sliders
 right there in the panel. Tools marked ● are on.
 
 Enhance works on the selected pixel or smart layer. If none is selected, it
@@ -452,7 +452,7 @@ gated. Copying clipped roots, linked ancestor/descendant sets,
 projective transforms inside the modal session, and anisotropic stroked paths
 are gated. A repeated matrix that would introduce unsupported shear also fails
 before creating a copy. These are bounded affine workflows, not a claim of
-pixel-identical Photoshop replay/pivot behavior.
+pixel-identical replay/pivot behavior of other editors.
 
 Warp places a 3×3 lattice over one pixel layer. It does not work on a
 group, a mask or several layers at once; rasterize a smart layer before warping

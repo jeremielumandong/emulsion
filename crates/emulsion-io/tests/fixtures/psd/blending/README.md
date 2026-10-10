@@ -1,4 +1,4 @@
-# Independent Photoshop blending references
+# Independent PSD blending references
 
 These small references separate raw layer inputs from independently saved output.
 `photoshop_blend_goldens.rs` builds new native `CompositeTree` nodes from numeric
@@ -22,7 +22,7 @@ That license has no image/fixture exclusion. No ag-psd artwork is included.
 [`manifest.json`](manifest.json) records each exact upstream-relative path,
 source SHA-256, writer/reader strings, raw input pixel hashes, and expected RGBA
 hashes. Schema 2 also records each node’s source-record index, physical channel
-IDs, flags byte, `lspf`, `lnsr`, and explicit Photoshop Background role, plus the
+IDs, flags byte, `lspf`, `lnsr`, and explicit PSD Background role, plus the
 case’s root target index. The verification script independently pins the source hashes; changing
 only the manifest cannot silently authorize new source material. Upstream raw
 URLs have the form:
@@ -30,25 +30,27 @@ URLs have the form:
 `https://raw.githubusercontent.com/psd-tools/psd-tools/d68bf46c7140a1f8c74be9c10b4e21103e820761/tests/psd_files/<source_path>`
 
 The MIT license establishes redistribution terms; the following separate
-evidence establishes the limited Photoshop provenance:
+evidence establishes the limited authoring provenance:
 
-- **opacity-fill.psd:** embedded VersionInfo says writer `Adobe Photoshop`,
-  reader `Adobe Photoshop CC 2019`. Its XMP history identifies creation in CC
-  2018 and a final save in CC 2019 on June 5, 2019. It was added by
+- **opacity-fill.psd:** embedded VersionInfo records the authoring
+  application's 2019 release as reader (see `manifest.json`). Its XMP history
+  identifies creation in the 2018 release and a final save in the 2019 release
+  on June 5, 2019. It was added by
   [commit ab6e6e48099312c65b89a184afacf7cae16e3341](https://github.com/psd-tools/psd-tools/commit/ab6e6e48099312c65b89a184afacf7cae16e3341).
-- **knockout fixtures:** embedded VersionInfo identifies Photoshop 2026.
+- **knockout fixtures:** embedded VersionInfo identifies the authoring
+  application's 2026 release.
   [Authoring commit 0a58ab02ef2230a98fbd09b68046c2f911e6c4d6](https://github.com/psd-tools/psd-tools/commit/0a58ab02ef2230a98fbd09b68046c2f911e6c4d6)
-  explicitly documents Photoshop-authored fixtures and verifies their expected
-  pixel values against Photoshop. The native harness does not use psd-tools'
+  explicitly documents fixtures authored in a commercial PSD editor and verifies
+  their expected pixel values against that editor. The native harness does not use psd-tools'
   implementation of knockout. Its upstream tests initially marked the knockout
   cases as strict expected failures of that implementation.
 - **group-clipping:** [commit 4847388b1ddb551f2cdaad5efdd65d90a6d9f903](https://github.com/psd-tools/psd-tools/commit/4847388b1ddb551f2cdaad5efdd65d90a6d9f903),
-  dated September 24, 2025, adds separately named Photoshop and Clip Studio PNG
-  references and tests each against the corresponding compatibility mode.
-  Photoshop's exact version is **not recorded**. The PSD itself has no XMP or
-  VersionInfo; it must not be described as Photoshop-authored. Upstream also
+  dated September 24, 2025, adds separately named PNG references from two
+  commercial editors and tests each against the corresponding compatibility
+  mode. The reference editor's exact version is **not recorded**. The PSD itself
+  has no XMP or VersionInfo; it must not be described as authored by either editor. Upstream also
   marks this PSD as a known broken read/write fixture. Only the separately
-  supplied Photoshop PNG is used as this case's output oracle.
+  supplied `group-clipping-photoshop.png` reference is used as this case's output oracle.
 
 Except for the untouched upstream group PNG, the PNGs here are lossless
 extractions of existing PSD merged channels using
@@ -73,7 +75,7 @@ not sampled from merged output. There is no alpha or color fitting.
 `opacity-fill`: 32×32, one full opaque red `(255,0,0,255)` raw layer. Opacity and
 Fill are each **171/255**, `clbl=1`, `infx=0`, `knko=0`. Its empty zero-area raster
 mask has outside value 255 and no channel samples, so it is an identity gate.
-The saved Photoshop output is **`(255,0,0,115)` at every pixel**. This tests the
+The saved authoring-application output is **`(255,0,0,115)` at every pixel**. This tests the
 native independent Fill and Opacity envelopes on transparency; it says nothing
 about the eight special-Fill modes, styles, or blending over a colored backdrop.
 
@@ -91,21 +93,21 @@ alpha 255 unless otherwise stated:
      `(191,0,225,423)` and is 255 everywhere else. The verifier checks every raw
      source byte against this numeric description.
 
-The stored group clipping byte is 1, but the independent Photoshop PNG displays
+The stored group clipping byte is 1, but the independent reference PNG displays
 the group unclipped; only blue clips to red. The manifest records both stored
 and effective clipping explicitly. The native scene thus uses an unclipped
 group with a clipped pixel member. This is not evidence that a native group
-which itself clips to a lower sibling will roundtrip to Photoshop. It also
+which itself clips to a lower sibling will roundtrip to third-party PSD editors. It also
 does not exercise a **group as clipping base**, fractional base alpha, or a
 non-Normal clipping envelope.
 
 The PSD's own merged image is different: it clips the group to black, with
-35,577 pixels different from the separate Photoshop PNG. The fixture verifier
+35,577 pixels different from the separate reference PNG. The fixture verifier
 asserts that those two images are not interchangeable.
 
-### Photoshop 2026 knockout boundary matrix
+### 2026 PSD knockout boundary matrix
 
-All are 32×32. Start with an explicit opaque white Photoshop Background, then
+All are 32×32. Start with an explicit opaque white PSD Background, then
 an ordinary opaque red layer named BG. A group
 `Outer` contains opaque green, then an `Inner` group containing opaque blue.
 Inner Fill is **128/255**, Opacity 255, and `infx=0`, `clbl=1`. All raw source
@@ -150,7 +152,7 @@ path is pinned to these premultiplied-linear RGBA16 contract values:
 - Deep/pass-through: `[13909,13909,65535,65535]`
 
 These raw16 assertions are native storage-contract checks for the fixed RGB8
-references; they are not independent 16-bit Photoshop exports. Legacy Normal
+references; they are not independent 16-bit third-party exports. Legacy Normal
 interpolation remains on its existing arithmetic and is not changed by these
 new-profile assertions.
 
@@ -190,14 +192,14 @@ A conservative appearance fallback for **a group that itself has clipping** is
 defensible on native export, and for a source group carrying clipping=1 on
 import. That inference must not be broadened to groups serving as clipping
 bases. Import fallback would preserve the source file's saved merged appearance,
-which in this fixture is different from the separate Photoshop application
+which in this fixture is different from the separate third-party application
 output; name that distinction rather than claiming both are identical.
 
-[Adobe's clipping guide](https://helpx.adobe.com/photoshop/using/revealing-layers-clipping-masks.html)
+[The vendor's clipping guide](https://helpx.adobe.com/photoshop/using/revealing-layers-clipping-masks.html)
 (page updated September 25, 2023) documents successive clipped layers and base
 semantics but does not settle group-node compatibility. The fixture does not
-establish a universal rule for current Photoshop versions. Before relaxing a
-conservative export guard, obtain a controlled current Photoshop save/open test
+establish a universal rule for current third-party editor versions. Before relaxing a
+conservative export guard, obtain a controlled current third-party save/open test
 for a group which is itself clipped, separately from a group used as a base.
 
 The separate [Patchy Blend If fixture](../blend-if/README.md) remains metadata
@@ -211,5 +213,5 @@ toggles, mask-hides-effects behavior, knockout with styles, the eight special
 Fill formulas, or Fill/Opacity with Blend Clipped Layers As Group off. Those
 families still need independently authored controlled input/output pairs.
 Existing CPU/GPU self-agreement and whole-image preview preservation cannot
-substitute for those pairs. No current Photoshop application was run as part of
+substitute for those pairs. No current third-party application was run as part of
 this harness, and no editable vector/filter recomputation is claimed.

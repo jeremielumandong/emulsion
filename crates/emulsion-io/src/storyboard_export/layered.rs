@@ -1,5 +1,5 @@
 //! Layered scene export for animation production: every panel of the chosen
-//! scenes as a layered OpenRaster or Photoshop file (groups, blend modes,
+//! scenes as a layered OpenRaster or PSD file (groups, blend modes,
 //! opacity and visibility kept by the shared ORA and PSD writers; review
 //! layers left out, as in every export), and one
 //! JSON file per scene describing its panels, timing, camera keys, layer

@@ -1,8 +1,8 @@
-//! The left tool rail, arranged the way Photoshop and GIMP users expect:
+//! The left tool rail, arranged the way users of layered editors expect:
 //! Move · Marquee · Lasso · Quick select · Crop · Eyedropper · Heal ·
 //! Brush · Clone · Eraser · Gradient · Smudge · Pen · Type · Shape · Mask ·
 //! Grade · Hand · Zoom, with the foreground/background swatches at the
-//! bottom, matching Photoshop's single-column Tools panel.
+//! bottom, matching the conventional single-column Tools panel.
 //! Related tools share one slot; the slot shows the member last used, and
 //! a right-click (or the corner mark) opens a fly-out with the others.
 
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 pub struct RailItem {
     pub name: &'static str,
     /// Icon: a Lucide name (`icons/<name>.svg` in the UI kit's assets) or
-    /// one of the `emulsion-*` drawings below. Photoshop's silhouettes, so
+    /// one of the `emulsion-*` drawings below. Industry-standard silhouettes, so
     /// the rail reads at a glance.
     pub glyph: &'static str,
     /// Default shortcut, for the tooltip and fly-out.
@@ -215,7 +215,7 @@ pub const GROUPS: &[&[RailItem]] = &[
         paint("Gradient", "emulsion-gradient", "G", PaintKind::Gradient),
         paint("Paint bucket", "paint-bucket", "Shift+G", PaintKind::Bucket),
     ],
-    // Photoshop's Blur / Sharpen / Smudge slot.
+    // The conventional Blur / Sharpen / Smudge slot.
     &[
         paint("Smudge", "pointer", "Shift+B", PaintKind::Smudge),
         paint(
@@ -261,12 +261,12 @@ pub const GROUPS: &[&[RailItem]] = &[
     &[item("Zoom", "zoom-in", "Z", Tool::Zoom)],
 ];
 
-/// Small gaps after these `GROUPS` slots, Photoshop's clusters: move ·
+/// Small gaps after these `GROUPS` slots, the conventional clusters: move ·
 /// selection · crop and sampling · retouch and paint · vector · Emulsion's
 /// mask and grade · navigation.
 pub const DIVIDERS: &[usize] = &[0, 3, 5, 11, 14, 16];
 
-/// Draw mode: the painter's rail, in the order Procreate users reach for.
+/// Draw mode: the painter's rail, in the order painters reach for.
 pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[
         paint("Brush", "brush", "B", PaintKind::Brush),
@@ -856,7 +856,7 @@ impl EditorView {
                 .when(!horizontal && !fixed_columns, |d| {
                     d.flex_col().h(length).w(breadth)
                 })
-                // Photoshop reads its double column across, then down.
+                // A double column reads across, then down.
                 .when(fixed_columns, |d| d.flex_row().w(breadth).h(length));
         }
         for (g, group) in groups.iter().enumerate() {
@@ -1059,7 +1059,7 @@ impl EditorView {
                             return;
                         }
                         // Clicking the tool you already hold opens its group,
-                        // the way click-and-hold does in Photoshop.
+                        // the way click-and-hold does in other editors.
                         if has_more && on {
                             this.rail.flyout = if this.rail.flyout == Some(g) {
                                 None
@@ -1204,7 +1204,7 @@ impl EditorView {
 
 impl EditorView {
     /// Draw mode: size and opacity as tall sliders beside the canvas,
-    /// where a painter's off hand finds them (Procreate's side bar).
+    /// where a painter's off hand finds them (as in tablet painting apps).
     pub(crate) fn draw_side_sliders(
         &mut self,
         p: &Palette,

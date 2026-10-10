@@ -6,7 +6,7 @@
 - Upstream Git blob: `db774029f8d7ba63c7345fa11e1b63cafeeab507`
 - SHA-256: `71bff054dbb4e1749192ba7d99034c689c0337c46c9fdcac86d63dbce9ca299b`
 - License: psd-tools MIT license, included as `LICENSE.psd-tools`.
-- [Contributor provenance and test-suite permission](https://github.com/psd-tools/psd-tools/issues/693#issuecomment-5874881734): rebuilt in Photoshop CS4, no copyrighted artwork.
+- [Contributor provenance and test-suite permission](https://github.com/psd-tools/psd-tools/issues/693#issuecomment-5874881734): rebuilt in a 2008-era (CS4) PSD editor, no copyrighted artwork.
 - [Upstream issue #693](https://github.com/psd-tools/psd-tools/issues/693), addressed by upstream PR #900.
 
 The document is 256×256, 8-bit RGB, with three composite channels. The `heart`
@@ -18,7 +18,7 @@ the length-only real-mask-header heuristic in ag-psd 0.3.
 RGB pixels, extracted with psd-tools 1.23.0 `PSDImage.open(path).topil().save(...)`.
 It is not a new psd-tools compositing render. The test checks that Emulsion's
 explicit appearance fallback preserves those stored pixels. It does not claim
-editable vector interchange or independent present-day Photoshop validation.
+editable vector interchange or independent present-day third-party validation.
 
 ## smartobject-layer.psd
 
@@ -27,7 +27,7 @@ editable vector interchange or independent present-day Photoshop validation.
 - SHA-256: `a34abf773a64f21b59d5a854f7d394e7ac41e402d0ce546ddd86d19c764a63a2`.
 - License: psd-tools repository MIT license, included as `LICENSE.psd-tools`.
   Its license has no fixture/image exclusion; no additional authorship or
-  present-day Photoshop-application verification is inferred from that license.
+  present-day third-party-application verification is inferred from that license.
 
 This is a 32×32 embedded RGBA8 PNG Smart Object, using an identity placed-layer
 transform and an empty external-linked-data block. It has no Smart Filter and

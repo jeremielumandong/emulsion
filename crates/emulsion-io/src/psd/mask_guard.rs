@@ -2,10 +2,10 @@
 //!
 //! This is not a second PSD decoder. It walks length-delimited base layer
 //! and Lr16/Lr32 records without interpreting pixels. Vector framing is checked
-//! separately before the dependency can discard unsupported path state. See Adobe's
+//! separately before the dependency can discard unsupported path state. See the PSD specification's
 //! Layer and Mask Information tables:
 //! <https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/>.
-//! Real-mask headers precede parameters in actual Photoshop files, despite the
+//! Real-mask headers precede parameters in real-world PSD files, despite the
 //! table's ordering, and are selected by channel -3, not the mask block length:
 //! <https://github.com/psd-tools/psd-tools/issues/693>.
 
@@ -256,7 +256,7 @@ pub(super) fn unsupported_mask_reason(bytes: &[u8]) -> GuardResult<Option<&'stat
 
 /// Visit the base layer-info body and any document-level high-depth bodies.
 /// The tagged body starts at the signed layer count, without a second length.
-/// `8B64` always carries an eight-byte size; in PSB the Adobe large-key list
+/// `8B64` always carries an eight-byte size; in PSB the specification's large-key list
 /// does too, even under `8BIM`. Use the dependency's authoritative key list
 /// (which additionally recognizes cinf) rather than misaligning later blocks.
 fn visit_layer_info<'a>(
@@ -562,7 +562,7 @@ pub(super) fn raw_metadata(bytes: &[u8]) -> GuardResult<RawMetadata<'_>> {
             && matches!((layout.channels, merged_alpha), (3, false) | (4, true)),
         opaque_rgb8: layout.depth == 8 && layout.mode == 3 && layout.channels == 3 && !merged_alpha,
         // Untagged RGB is the existing importer's sRGB convention, not evidence
-        // of Photoshop's document blending-gamma preference.
+        // of the authoring app's document blending-gamma preference.
         srgb: unique_icc && icc.is_none_or(known_srgb_profile),
         single_layer_body: bodies == 1,
         known_document_metadata,
@@ -589,7 +589,7 @@ fn genuine_merged_declaration(body: &[u8]) -> bool {
 }
 
 /// Byte-identical IEC sRGB profiles independently inspected in the pinned
-/// Photoshop corpus. Unlike the general import color-conversion heuristic,
+/// third-party PSD corpus. Unlike the general import color-conversion heuristic,
 /// this decision uses no sample probes or color tolerance. The two profiles
 /// differ only in their ICC rendering-intent header; neither encodes blending
 /// gamma. Unknown/custom ICC profiles remain ineligible for auto-selection.

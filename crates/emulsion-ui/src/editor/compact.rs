@@ -25,7 +25,7 @@ pub(super) enum Bar {
     /// One-click brush shelf: pinned and recent brushes.
     Brushes,
     /// Draw mode's large paint, smudge, erase, layers and colour controls
-    /// with size and opacity sliders, like Procreate's side bar.
+    /// with size and opacity sliders, like a tablet painting app's side bar.
     Dock,
 }
 
@@ -95,10 +95,10 @@ pub(super) struct CompactLayout {
     drop_edge: Option<Edge>,
     pub(super) tool_ids: Vec<String>,
     pub(super) hidden_menu_ids: Vec<String>,
-    /// Docked toolbars float over the canvas (Procreate) instead of
-    /// taking their own space beside it (Photoshop).
+    /// Docked toolbars float over the canvas (tablet style) instead of
+    /// taking their own space beside it (desktop style).
     pub(super) overlay: bool,
-    /// Tools panel columns: 1, or 2 for Photoshop's double-column toolbar.
+    /// Tools panel columns: 1, or 2 for the common double-column toolbar.
     pub(super) tool_columns: u8,
     /// Live options popup, so responsive removal can finish its focus lifecycle.
     options_popup: Option<WeakEntity<PopoverState>>,
@@ -117,7 +117,7 @@ impl CompactLayout {
             Edge::Top,
             Edge::Right,
         ];
-        // Photo matches Photoshop's Essentials: Tools left with the colour
+        // Photo matches the conventional photo-editor layout: Tools left with the colour
         // swatches at their foot, the options bar across the top.
         let open = [true, true, true, false, draw, false];
         // The shared 48px rail starts at 1×; saved per-toolbar scales still override it.
@@ -881,7 +881,7 @@ impl EditorView {
                 Edge::Top | Edge::Bottom
             );
         let count = if attached_row {
-            // A full-width options bar, as in Photoshop: show what fits.
+            // A full-width options bar: show what fits.
             let remaining = (available - 260.).max(0.);
             if self.is_photo_workflow() && self.tool == Tool::Select {
                 // Selection operations are one coherent group, wider than a
@@ -1045,7 +1045,7 @@ impl EditorView {
         .size_full();
         let mut docked: Vec<(Edge, AnyElement)> = Vec::new();
         // Photo's options belong above the document tabs, spanning the full
-        // window like Photoshop. Customized floating/other edges still dock
+        // window as in pro editors. Customized floating/other edges still dock
         // exactly where their saved layout specifies.
         let photo = self.is_photo_workflow();
         let mut header_options = None;
@@ -1074,7 +1074,7 @@ impl EditorView {
                         .get()
                         .map(|b| b.size)
                         .unwrap_or(window.viewport_size());
-                    // Photoshop keeps the colour swatches at the foot of the
+                    // Pro editors keep the colour swatches at the foot of the
                     // Tools panel; they live here unless the Colors bar is shown.
                     let swatches = !self.compact.bars[Bar::Color as usize].open;
                     let available = (if horizontal {
@@ -1100,7 +1100,7 @@ impl EditorView {
                         )
                         .into_any_element()
                     };
-                    // Photoshop's » toggle switches one and two columns.
+                    // The » toggle switches one and two columns.
                     let double = self.compact.tool_columns >= 2;
                     let columns = control("tool-columns-toggle", if double { "«" } else { "»" })
                         .accessibility_label(if double {
@@ -1204,7 +1204,7 @@ impl EditorView {
                 (None, element) => overlays.push(element),
             }
         }
-        // Docked toolbars sit beside the canvas, Photoshop-style; the canvas
+        // Docked toolbars sit beside the canvas, desktop-style; the canvas
         // keeps whatever room is left.
         let mut sides: [Vec<AnyElement>; 4] = Default::default();
         for (edge, element) in docked {

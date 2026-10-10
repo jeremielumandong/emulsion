@@ -1,4 +1,4 @@
-//! Storyboarder workflow extras on the Stage: line mileage (SB4) counted
+//! Storyboard workflow extras on the Stage: line mileage (SB4) counted
 //! from every committed stroke and shown in the panel inspector, and the
 //! overlays and menu entries of Edit in an external editor
 //! (`storyboard_external`) and Sketch Sprint (`storyboard_sprint`).

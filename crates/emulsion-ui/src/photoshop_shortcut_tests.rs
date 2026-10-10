@@ -1,4 +1,4 @@
-//! Photoshop's default shortcuts reach the matching Emulsion features.
+//! The industry-standard default shortcuts reach the matching Emulsion features.
 use super::*;
 use crate::editor::{EditorView, Tool};
 use emulsion_core::NodeId;

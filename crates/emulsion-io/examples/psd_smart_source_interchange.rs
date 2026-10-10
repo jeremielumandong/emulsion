@@ -5,7 +5,7 @@
 //!
 //! Uses only the pinned MIT psd-tools fixture. The original embedded PNG is
 //! retained byte-for-byte; neither layer previews nor a saved merged composite
-//! prove original-source preservation. No Photoshop application/Smart Filter
+//! prove original-source preservation. No third-party application/Smart Filter
 //! interoperability is claimed by this source-only check.
 
 use emulsion_core::{
@@ -344,7 +344,7 @@ fn main() -> Result<()> {
         out.join("manifest.json"),
         serde_json::to_vec_pretty(&json!({
             "schema": 1, "kind": "source-only-smart-interchange", "canvas": [64, 48],
-            "scope": "Exact embedded PNG, placed identity, ordinary raster/vector masks and native history; no Photoshop application or Smart Filter support claim",
+            "scope": "Exact embedded PNG, placed identity, ordinary raster/vector masks and native history; no third-party application or Smart Filter support claim",
             "input": file(&out, "input-smartobject-layer.psd")?,
             "provenance": "psd-tools MIT fixture at d68bf46c7140a1f8c74be9c10b4e21103e820761; LICENSE.psd-tools",
             "source": {"file": "original.png", "encoded_sha256": PNG_SHA256, "size": [32, 32],

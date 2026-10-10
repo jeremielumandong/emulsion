@@ -2,7 +2,7 @@
 
 These generated fixtures are self-authored test artwork. No image from ag-psd's
 image-excluding license, or additional third-party PSD, is vendored here.
-The separately documented Photoshop CS4 contributor fixture in `README.md`
+The separately documented CS4-era contributor fixture in `README.md`
 remains an appearance-fallback regression, not evidence of editable parity.
 
 Generate into a new or empty directory:
@@ -32,7 +32,7 @@ explicitly disclosed geometry variant. Each export records and asserts its actua
 `WriteReport`, including zero rounded density fields in every vector case and
 eight in the boundary supplement.
 The independent verifier checks the selected profile in the native archives;
-the supplement also checks it in both history states. No Photoshop application
+the supplement also checks it in both history states. No third-party application
 rendering claim follows from selecting this native profile.
 
 ## What is tested
@@ -185,8 +185,8 @@ against the native preview in a separate report field. Saved-preview equality
 is not fresh compositing and is never accepted as vector-geometry proof.
 
 This suite establishes the bounded editable interchange subset with an independent
-reader. It does not claim a present-day Photoshop application open/edit/save test,
-Adobe rendering parity, general Boolean contour support, or editable fallback for
+reader. It does not claim a present-day third-party application open/edit/save test,
+third-party rendering parity, general Boolean contour support, or editable fallback for
 unrecognized path metadata. Core tests separately exercise unsupported compound,
 self-intersecting, unknown-operation/record, out-of-range coordinate, long mask
 parameter, derived-raster (`from_vector_data`), and `-3` layouts.

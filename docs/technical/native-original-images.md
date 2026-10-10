@@ -108,7 +108,7 @@ nested document and claim that its editable source survived.
 The PSD source-only adapter captures the exact admitted PNG bytes and re-emits
 them after validation. Sources without retained originals still require exact
 native → RGBA8 → native equality. Empty filter-stack cache equality remains exact.
-Repeated Photoshop instance references to one source UUID remain unsupported:
+Repeated PSD instance references to one source UUID remain unsupported:
 native source editing is node-local. Independent native duplicate nodes export
 distinct source UUIDs even if their retained byte resources deduplicate natively.
 
@@ -117,4 +117,4 @@ the independent MIT `smartobject-layer.psd` fixture, history-free/history/`.emu`
 persistence, lifecycle/Undo, no-op Apply, resource limits, false versions, digest
 and source-tile mismatches, resource deduplication, and absence of source payloads
 from PSD fallback. These tests do not claim full editable Smart Filter interchange
-or a current Photoshop application acceptance session.
+or a current reference-application acceptance session.

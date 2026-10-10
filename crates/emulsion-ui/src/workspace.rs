@@ -1431,7 +1431,7 @@ impl Workspace {
     }
 
     /// A new 1920×1080 document: `background` fills a Background layer;
-    /// None gives a single empty, transparent layer (Photoshop's
+    /// None gives a single empty, transparent layer (the conventional
     /// "Background contents: Transparent").
     pub fn new_document_with(
         &mut self,
@@ -2661,7 +2661,7 @@ impl Render for Workspace {
                 })
             }))
             .on_action(cx.listener(|this, _: &ToolVerticalType, _, cx| {
-                // Shift+T steps between the two type tools, as in Photoshop.
+                // Shift+T steps between the two type tools, as is conventional.
                 this.with_editor(cx, |e, cx| {
                     let vertical = e.tool == crate::editor::Tool::Type && e.type_tool.spec.vertical;
                     e.set_type_mode(!vertical, cx)

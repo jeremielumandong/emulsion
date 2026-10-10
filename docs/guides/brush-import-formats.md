@@ -4,12 +4,12 @@ Emulsion stores its catalog in `brush-library.json` in its application data dire
 
 | Format | Supported content | Limits |
 | --- | --- | --- |
-| `.embrushes` | Selected brushes, ordered sets/libraries (including empty sets), current settings, original baselines, reset points, metadata, dual components and PNG source assets | Brush exports import into the selected set; set exports create a set in the selected library; library exports create an independent library. This is Emulsion's portable format, not a Procreate export. |
+| `.embrushes` | Selected brushes, ordered sets/libraries (including empty sets), current settings, original baselines, reset points, metadata, dual components and PNG source assets | Brush exports import into the selected set; set exports create a set in the selected library; library exports create an independent library. This is Emulsion's portable format, not a third-party `.brushset` export. |
 | `.brush`, `.brushset` | Scalar settings with Emulsion equivalents, shape and grain PNGs | Conversion is approximate. Unsupported property names are reported; external source archives are preserved. Imported brush sets become named sets. |
-| `.brushlibrary` | ZIP layouts containing set/brush folders with `Brush.archive`, or nested `.brush` / `.brushset` archives | Creates a library and recovers set names from folder/archive labels. Proprietary ordering metadata is not interpreted. Alternate layouts fail explicitly. Only synthetic structural fixtures have been tested; no claim of complete Procreate 5.4 archive compatibility. |
-| `.abr` | 8-bit sampled tips in versions 1, 2, 6.1 and 6.2; uncompressed or PackBits scanlines; version 2 UTF-16 names | Photoshop dynamics/descriptors and procedural brush records are not converted. Other versions, depths and compression modes fail explicitly. Tested against synthetic binary fixtures; real brush packs require additional compatibility validation. |
+| `.brushlibrary` | ZIP layouts containing set/brush folders with `Brush.archive`, or nested `.brush` / `.brushset` archives | Creates a library and recovers set names from folder/archive labels. Proprietary ordering metadata is not interpreted. Alternate layouts fail explicitly. Only synthetic structural fixtures have been tested; no claim of complete `.brushlibrary` archive compatibility. |
+| `.abr` | 8-bit sampled tips in versions 1, 2, 6.1 and 6.2; uncompressed or PackBits scanlines; version 2 UTF-16 names | ABR dynamics/descriptors and procedural brush records are not converted. Other versions, depths and compression modes fail explicitly. Tested against synthetic binary fixtures; real brush packs require additional compatibility validation. |
 
-Procreate's handbook documents the library/set/brush hierarchy and accepted file extensions, but does not specify its binary archive layout. [Brush libraries](https://help.procreate.com/procreate/handbook/brushes/brush-library)
+The format vendor's handbook documents the library/set/brush hierarchy and accepted file extensions, but does not specify its binary archive layout. [Brush libraries](https://help.procreate.com/procreate/handbook/brushes/brush-library)
 
 Emulsion's ABR parser uses bounded slices and rejects invalid dimensions and scanlines.
 

@@ -87,7 +87,7 @@ is pasted and a message says why.
 ## Drawing on the Stage
 
 Panels are drawn with Paint's tools: the same brushes (with pressure and
-tilt), brush library and **File → Import brushes…** (including Photoshop
+tilt), brush library and **File → Import brushes…** (including
 `.abr`), symmetry (mirror and radial, in Brush settings) and colour picker.
 Draw clean-up lines on a **vector layer** (**Layer → New Vector Layer**) to
 keep them editable: the Brush and Eraser, the Line, Rectangle, Ellipse and
@@ -123,11 +123,11 @@ swatch; each change is one Undo step.
 For storyboards, **File → Import** offers:
 
 - **Import into panel…**: puts the layers of a PSD, PSB, ORA or image file on
-  top of the active panel, fitted to the frame. Photoshop groups, masks, blend
+  top of the active panel, fitted to the frame. PSD groups, masks, blend
   modes and clipping masks are kept.
 - **Import as panels…**: adds one panel per file (up to 100) after the active
   panel, each named after its file and fitted to the frame. SVG files arrive
-  as editable vectors. PDF and Illustrator (`.ai`) files add one panel per
+  as editable vectors. PDF and `.ai` files add one panel per
   page, in file then page order, named after the file ("Layouts page 2"),
   as editable vector art; up to 200 pages a file.
 - **Import script…**: lays a screenplay out as panels; see
@@ -137,11 +137,11 @@ For storyboards, **File → Import** offers:
 
 Each import is one Undo step; locked panels are refused.
 
-PDF and Illustrator pages are converted by Poppler (`pdftocairo`) or MuPDF
+PDF and `.ai` pages are converted by Poppler (`pdftocairo`) or MuPDF
 (`mutool`), which must be installed and on your PATH; without them the import
 says so and adds nothing. A progress card shows the page being converted, with
-**Cancel**. Illustrator files open when they were saved with PDF
-compatibility (Illustrator's default).
+**Cancel**. `.ai` files open when they were saved with PDF
+compatibility (the usual default).
 
 ### Paper worksheets
 
@@ -390,7 +390,7 @@ camera frame and arrow thickness).
 
 ## Shot Generator
 
-Build a panel's shot in 3D, Storyboarder style, and draw over it. Press
+Build a panel's shot in 3D and draw over it. Press
 **3D** on the Stage toolbar (or **View › Shot Generator**,
 **Ctrl+Alt+Shift+G**) to open the active panel's set in place of the
 Stage: add posable mannequins, props and lights, pose them with presets,
@@ -579,8 +579,8 @@ display. Use the search box at the top of Settings to find any setting.
   downloaded Piper voices (see [Scratch voices](#scratch-voices)). The row
   says which engines are installed; **Refresh** checks again.
 - **External editor**: the program **Edit in external editor** opens panels
-  with (a path such as `/usr/bin/krita` or `C:\Program Files\GIMP 2\bin\gimp-2.10.exe`,
-  a command on the PATH, or an app such as `Adobe Photoshop 2025.app` on
+  with (a path such as `/usr/bin/paint-app` or `C:\Program Files\PaintApp\paintapp.exe`,
+  a command on the PATH, or an app such as `PaintApp.app` on
   macOS), and whether it gets OpenRaster (`.ora`) instead of PSD. Leave it
   blank to use the system's app for the file type (see
   [Edit in an external editor](#edit-in-an-external-editor)).
@@ -926,7 +926,7 @@ timing), and **Retake** or closing the timer discards it.
 
 ## Edit in an external editor
 
-Draw a panel in Photoshop, Krita, GIMP or any painting app and have every
+Draw a panel in any painting app and have every
 save come straight back. Choose **View → Edit Panel in External Editor** for
 the active panel, or **Edit in external editor** in a Board card's panel menu.
 
@@ -1230,7 +1230,7 @@ board shows every other frame. GIFs have no sound and at most 6,000 frames.
 production. Each panel becomes a layered file, and each scene a JSON file
 that describes its timing, camera and animation:
 
-- **Format**: **OpenRaster (.ora)** or **Photoshop (.psd)**. Layers keep
+- **Format**: **OpenRaster (.ora)** or **PSD (.psd)**. Layers keep
   their names, groups, blend modes, opacity, visibility, masks and clipping,
   through the same writers as File → Save As. Review layers are left out.
 - **Scenes**: all scenes, the scenes of the Board's selected panels, or one
@@ -1272,25 +1272,25 @@ Each panel has:
 ## Editorial interchange
 
 An animatic can go to editing software and come back. Emulsion writes and
-reads three formats: **CMX 3600 EDL** (`.edl`), **Final Cut Pro 7 XML**
-(`.xml`, also read by Premiere Pro, DaVinci Resolve and Avid Media Composer)
+reads three formats: **CMX 3600 EDL** (`.edl`), **XML edit list** (xmeml,
+`.xml`, read by most professional editing applications)
 and **OpenTimelineIO** (`.otio`). AAF is not supported; use one of these
-with Avid.
+with editors that require AAF.
 
 ### Export an edit
 
-**File → Export Edit (EDL, Final Cut XML, OpenTimelineIO)…** writes the
+**File → Export Edit (EDL, XML, OpenTimelineIO)…** writes the
 board as it is (unsaved changes included):
 
 - Panels play end to end on the first picture track, starting at
   01:00:00:00; thumbnail sheets are left out. At 29.97 and 59.94 fps
   timecodes use drop-frame numbering (`01:00:00;00`).
 - Each panel's transition starts at its cut. EDLs name dissolves and wipes
-  from the left or top; other transitions are written as dissolves (Final
-  Cut XML and OpenTimelineIO keep them).
+  from the left or top; other transitions are written as dissolves (xmeml
+  XML and OpenTimelineIO keep them).
 - Sound clips go on their own tracks with their gain (clip gain plus track
   volume). EDLs hold four sound tracks and no levels.
-- Final Cut XML and OpenTimelineIO also carry the reference video on a
+- xmeml XML and OpenTimelineIO also carry the reference video on a
   second picture track and the audio markers.
 - **Panel media**: **Stills (PNG)** or **Movies (ProRes MOV)**, each the
   panel through its camera with its layer motion, and as many held frames
@@ -1532,4 +1532,4 @@ folders are not used.
 The light table and the reference video do not show while the view is
 rotated, and the reference video does not show in the full-screen player
 or in GIF exports. See the
-[Storyboard Pro parity plan](../specs/storyboard-pro-parity.md#delivery-phases).
+[storyboard feature parity plan](../specs/storyboard-pro-parity.md#delivery-phases).

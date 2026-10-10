@@ -357,7 +357,7 @@ fn compact_editor_gives_canvas_more_room_and_contains_toolbars(cx: &mut TestAppC
             let canvas = window.find("editor-canvas-column").bounds();
             assert!(canvas.size.width > legacy_canvas.size.width);
             assert!(canvas.size.height > legacy_canvas.size.height);
-            // Photoshop's Essentials: the colour swatches sit at the foot
+            // Conventional photo layout: the colour swatches sit at the foot
             // of the Tools panel and in the panel dock, not in their own bar.
             assert!(window.try_find("canvas-toolbar-color").is_none());
             assert!(window.find("tool-rail-swatches").visible());
@@ -899,7 +899,7 @@ fn photo_mode_matches_photoshop_essentials_layout(cx: &mut TestAppContext) {
     let original = doc(&["Photo"], None);
     let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
     cx.update(|window, cx| {
-        // Menu bar in Photoshop's order.
+        // Menu bar in the conventional order.
         let menus: Vec<_> = [
             "file", "edit", "image", "layer", "select", "filter", "view", "window",
         ]
@@ -1019,7 +1019,7 @@ fn tools_panel_has_quick_mask_and_a_double_column_toggle(cx: &mut TestAppContext
     let original = doc(&["Photo"], None);
     let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
     let single = cx.update(|window, cx| {
-        // Photoshop: the Quick Mask button sits under the colour swatches.
+        // The Quick Mask button sits under the colour swatches.
         let swatches = window.find("fg-swatch").bounds();
         let quick = window.find("quick-mask-toggle").bounds();
         assert!(quick.origin.y >= swatches.bottom() - gpui_kit::px(1.));

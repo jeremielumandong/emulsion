@@ -1,5 +1,5 @@
 //! Every import format opens to the same pixels: the `image` crate's wider
-//! set, JPEG XL, GIMP's XCF with its layer facts, and (when the machine has
+//! set, JPEG XL, XCF with its layer facts, and (when the machine has
 //! ImageMagick) a converter-backed format.
 
 use emulsion_core::NodeKind;
@@ -113,7 +113,7 @@ fn gimp_xcf_opens_with_layer_names_offsets_and_opacity() {
     };
     let mut xcf = XcfCreator::new(11, 6, 4, ColorType::Rgb);
     xcf.add_properties(&vec![]);
-    // GIMP order: top layer first.
+    // XCF order: top layer first.
     let layers = vec![
         layer(
             "Sticker",

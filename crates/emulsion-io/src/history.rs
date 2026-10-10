@@ -46,7 +46,7 @@ use zip::ZipArchive;
 // Version 11 retains independent editable native vector masks.
 // Version 12 shares dedicated Smart Filter mask planes across snapshots.
 // Version 13 shares original Smart PNG resources with source-digest binding.
-// Version 14 retains Photoshop sRGB v1 and explicit Background identity.
+// Version 14 retains PSD-compatible sRGB v1 and explicit Background identity.
 // Version 15 preserves independent Smart Filter stack and item enabled state.
 // Version 16 retains Smart projective placements and component mappings.
 pub const HISTORY_VERSION: u32 = 16;

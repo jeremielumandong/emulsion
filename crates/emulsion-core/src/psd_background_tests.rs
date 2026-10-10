@@ -236,7 +236,7 @@ fn graph_canvas_merge_tracks_target_and_prunes_invalidated_role() {
     assert!(
         crate::graph::compare(&base, &theirs)
             .iter()
-            .any(|row| row.label == "Photoshop Background")
+            .any(|row| row.label == "PSD Background")
     );
     let mut ours = base.clone();
     ours.blend_space = BlendSpace::PhotoshopSrgbV1;

@@ -74,7 +74,7 @@ pub struct WorkspaceLayout {
     /// Docked toolbars float over the canvas instead of sitting beside it.
     /// `None` uses the shared docked arrangement in Photo and Paint.
     pub toolbars_overlay: Option<bool>,
-    /// Columns in the Tools panel: 1, or 2 (Photoshop's double column).
+    /// Columns in the Tools panel: 1, or 2 (the conventional double column).
     pub tool_columns: u8,
     /// Storyboards only: whether the Board replaces the Stage. `None` for
     /// layouts saved from other documents, which leave the view as it is.
@@ -189,7 +189,7 @@ pub struct Settings {
     /// Show the power-user row of tool options (dynamics, symmetry,
     /// guides). Off for a beginner-friendly bar.
     pub advanced_tools: bool,
-    /// Draw mode: a Procreate-like shell with only the drawing tools and
+    /// Draw mode: a focused painting shell with only the drawing tools and
     /// the Layers dock, for painting sessions.
     pub draw_mode: bool,
     /// Default image provider: "", "a1111", "openai", or "google".

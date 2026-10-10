@@ -37,7 +37,7 @@ feather are derived through the shared raster-mask implementation before affine
 sampling. Inspection ignores enabled state; it never changes export appearance.
 The old integer mix and every filter kernel remain native contracts. The
 versioned RGB mask mix has bounded [independent final-pixel evidence](../../crates/emulsion-core/tests/fixtures/photoshop-smart-filter-mask/README.md)
-from Photoshop-authored, untagged captures: stored-encoded-RGB interpolation
+from application-authored PSD, untagged captures: stored-encoded-RGB interpolation
 matches within one 8-bit code, whereas linear interpolation misses by up to 34.
 This does not establish source colorimetry, Gaussian/resize parity, per-filter
 blend/opacity semantics, or editable PSD Smart Filter interchange.
@@ -98,7 +98,7 @@ is therefore not the mask-bake contract. Tests require exact independently
 rounded source storage and reference rendering, exact representable cases, and
 an independent float compositing model with opaque-backdrop appearance checks.
 Rasterize retains the ordinary mask and its exact rendering contract. The
-independent Photoshop rasterized-target tolerance is unchanged.
+independent reference-application rasterized-target tolerance is unchanged.
 
 First-filter UI application captures source placement and selection before the
 background render. Conversion, the rendered stack and initial mask publish as

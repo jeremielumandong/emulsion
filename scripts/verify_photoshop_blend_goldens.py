@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify/re-extract bounded Photoshop blending references; never composite.
+"""Verify/re-extract bounded PSD blending references; never composite.
 
 Requires psd-tools 1.23.0 and Pillow. Run with --write only to regenerate the
 manifest and saved-image PNGs, or --write-manifest to update metadata only.
@@ -191,7 +191,7 @@ def extract_node(layer, psd, raw_records, record_indices):
     raw_clip = bool(layer._record.clipping)
     group = layer.is_group()
     # This compatibility exception is independently demonstrated by the separate
-    # upstream Photoshop PNG, NOT inferred from the PSD's different merged data.
+    # upstream reference PNG export, NOT inferred from the PSD's different merged data.
     effective_clip = raw_clip and not group
     result = {
         "name": layer.name,

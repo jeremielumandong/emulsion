@@ -18,7 +18,7 @@
 //! ```
 //!
 //! Emulsion reads `emulsion.json` when present and falls back to `stack.xml`,
-//! so ORA files from Krita, MyPaint or GIMP open too. Other readers see the
+//! so OpenRaster files from other painting apps open too. Other readers see the
 //! raster layers and groups when representable. Documents with masks,
 //! clipping, adjustments, fills, or styles expose a named merged appearance
 //! layer to other readers; their editable originals remain in the manifest.
@@ -56,7 +56,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 // Version 11 retains independent editable native vector masks.
 // Version 12 retains dedicated Smart Filter masks, including dormant descriptors.
 // Version 13 preserves original Smart PNG resources bound to exact native source pixels.
-// Version 14 retains Photoshop sRGB v1, explicit Background identity, and Invert Smart Filters.
+// Version 14 retains PSD-compatible sRGB v1, explicit Background identity, and Invert Smart Filters.
 // Version 15 preserves independent Smart Filter stack and item enabled state.
 // Version 16 retains Smart projective placements and component mappings.
 pub const FORMAT_VERSION: u32 = 16;

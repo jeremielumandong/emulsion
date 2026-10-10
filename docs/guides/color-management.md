@@ -99,7 +99,7 @@ Transforms:
 | --- | --- |
 | ColorSpace, Look, Group | Yes, in both directions. |
 | Matrix, Exponent, ExponentWithLinear, Log, LogAffine, LogCamera, CDL, Range | Yes, with every negative-value style and both directions. |
-| File | `.cube` (1D, 3D, or a 1D shaper and a 3D LUT; Resolve and Iridas keywords), `.spi1d`, `.spi3d`, and `.clf`/`.ctf` with Matrix, LUT1D, LUT3D, Range, Log, Exponent and ASC_CDL nodes. Linear, tetrahedral and nearest interpolation. 1D LUTs invert; 3D LUTs do not. |
+| File | `.cube` (1D, 3D, or a 1D shaper and a 3D LUT; both common `.cube` keyword dialects), `.spi1d`, `.spi3d`, and `.clf`/`.ctf` with Matrix, LUT1D, LUT3D, Range, Log, Exponent and ASC_CDL nodes. Linear, tetrahedral and nearest interpolation. 1D LUTs invert; 3D LUTs do not. |
 | FixedFunction | ACES_Glow03/10, ACES_RedMod03/10, ACES_DarkToDim10, ACES_GamutComp13. |
 | Builtin | IDENTITY; the ACES AP0/AP1 utility matrices; ACEScct, ACEScc and ACEScg to ACES2065-1; the ACEScct curve; the Blue Light Artifact Fix and ACES 1.3 Gamut Compression LMTs; the ACES 1.0 SDR output transforms (SDR-CINEMA_1.0, SDR-VIDEO_1.0 and the 1.1 Rec.709- and P3-limited variants); display encodings to Rec.1886 (Rec.709, Rec.2020), gamma 2.2, sRGB, gamma 2.6 P3 (DCI, D65, D60), Display P3, ST 2084 (Rec.2100 PQ, P3-D65) and the PQ curves. |
 

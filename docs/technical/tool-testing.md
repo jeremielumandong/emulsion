@@ -97,7 +97,7 @@ Layers panel, numeric/text/search/dialog focus, pointer release/focus loss,
 Save/Save As/export/close during a provisional copy, and a committed native-file
 save/reopen. Verify the repeat-transform reference fixture against the declared
 document-space delta semantics. Headless coverage alone does not demonstrate
-Photoshop-identical pivot behavior or current Photoshop runtime parity.
+reference-identical pivot behavior or runtime parity with other editors.
 
 Selected-pixel non-affine regression coverage in `photo_repeat_transform_tests.rs`:
 
@@ -145,9 +145,9 @@ cargo test --locked -p emulsion-raster --lib locked_eraser -- --test-threads=1
 cargo test --locked -p emulsion-ui --lib photo_locked_eraser_tests -- --test-threads=1
 ```
 
-The behavior follows Adobe's [Eraser documentation](https://helpx.adobe.com/photoshop/desktop/repair-retouch/clean-restore-images/erase-parts-of-an-image-with-the-eraser-tool.html)
+The behavior follows the PSD-format vendor's [Eraser documentation](https://helpx.adobe.com/photoshop/desktop/repair-retouch/clean-restore-images/erase-parts-of-an-image-with-the-eraser-tool.html)
 and the separate [Clear/Behind restrictions](https://helpx.adobe.com/photoshop/desktop/repair-retouch/adjust-light-tone/blending-mode-descriptions.html).
-These tests do not establish Photoshop-identical output for every brush preset
+These tests do not establish reference-identical output for every brush preset
 or hardware backend, or add Background Eraser, Magic Eraser, or Erase to History.
 Native QA should additionally check visible background-color erasing and a
 save/reopen round trip on opaque and soft-edged layers.

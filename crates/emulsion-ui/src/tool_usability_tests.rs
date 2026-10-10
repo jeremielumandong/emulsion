@@ -164,7 +164,7 @@ fn explicit_subtool_shortcuts_reach_the_advertised_tools(cx: &mut TestAppContext
             assert_eq!(editor.read(cx).tools.select, shape);
         });
     }
-    // Shift+letter steps through the group, as with Photoshop's default
+    // Shift+letter steps through the group, as with the industry-standard default
     // "Use Shift Key for Tool Switch".
     for (keys, shape) in [
         ("shift-w", SelectShape::Wand),
@@ -185,7 +185,7 @@ fn explicit_subtool_shortcuts_reach_the_advertised_tools(cx: &mut TestAppContext
     for (keys, kind) in [
         ("shift-b", PaintKind::Smudge),
         ("shift-b", PaintKind::Brush),
-        // Photoshop: Filter > Liquify.
+        // Filter > Liquify.
         ("ctrl-shift-x", PaintKind::Liquify),
     ] {
         cx.simulate_keystrokes(keys);
@@ -219,7 +219,7 @@ fn explicit_subtool_shortcuts_reach_the_advertised_tools(cx: &mut TestAppContext
             assert_eq!(editor.read(cx).tools.shape, kind);
         });
     }
-    // Q is Photoshop's Quick Mask toggle; it keeps a painting tool.
+    // Q is the standard Quick Mask toggle; it keeps a painting tool.
     cx.simulate_keystrokes("q");
     cx.run_until_parked();
     cx.update(|_, cx| {

@@ -41,7 +41,7 @@ failed probe or malformed critical snapshot/node/kind shape is never affirmative
 evidence of an old supported format. The lexical scanner retains only nesting
 positions, and source regressions count scan work rather than relax timeouts.
 
-Native/history version 13+, OriginalImage, Photoshop compositing/Background,
+Native/history version 13+, OriginalImage, PSD-compatible compositing/Background,
 Invert and explicit enabled flags, and opaque editable source descriptors
 require preservation. Present unknown/unclassifiable retired archives cannot be
 discarded. Source resources remain unopened; even a future nested native source

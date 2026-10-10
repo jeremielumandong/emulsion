@@ -1,5 +1,5 @@
 //! Editorial interchange for storyboards. File → Export Edit… writes the
-//! animatic as an EDL, Final Cut Pro 7 XML or OpenTimelineIO edit with each
+//! animatic as an EDL, XML edit list (xmeml) or OpenTimelineIO edit with each
 //! panel's media (stills or movies) in a folder beside it, off the UI
 //! thread with progress and Cancel. File → Import → Conform to Edit… reads
 //! an edit back, shows what would change (dry run), lets the person choose
@@ -193,7 +193,7 @@ impl Render for EditExport {
                 "One picture track and four sound tracks; no levels, reference video or wipes other than from the left or top."
             }
             Format::Xmeml => {
-                "For Final Cut Pro 7, Premiere Pro, DaVinci Resolve and Avid: panels, transitions, sound with levels, reference video and markers."
+                "For video editors that read XML edit lists (xmeml): panels, transitions, sound with levels, reference video and markers."
             }
             Format::Otio => {
                 "For any OpenTimelineIO tool: panels, transitions, sound, reference video and markers."
@@ -282,7 +282,7 @@ impl ConformDialog {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose an EDL, Final Cut XML or OpenTimelineIO edit".into()),
+            prompt: Some("Choose an EDL, XML edit list or OpenTimelineIO edit".into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -377,7 +377,7 @@ impl Render for ConformDialog {
         let p = theme::palette(cx);
         let preview = match (&self.path, &self.edit, &self.preview) {
             (None, _, _) => mono(
-                "Choose an EDL (.edl), Final Cut XML (.xml) or OpenTimelineIO (.otio) edit.",
+                "Choose an EDL (.edl), XML edit list (.xml) or OpenTimelineIO (.otio) edit.",
                 10.5,
                 p.muted,
             ),
@@ -493,7 +493,7 @@ impl Render for ConformDialog {
 }
 
 impl EditorView {
-    /// File → Export Edit (EDL, Final Cut XML, OpenTimelineIO)…
+    /// File → Export Edit (EDL, XML edit list, OpenTimelineIO)…
     pub(crate) fn edit_export_dialog(
         &mut self,
         window: &mut Window,

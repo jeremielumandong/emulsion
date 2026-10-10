@@ -936,11 +936,7 @@ impl Render for LayeredExport {
                 "storyboard-layered-ora",
                 "OpenRaster (.ora)",
             ),
-            (
-                layered::Format::Psd,
-                "storyboard-layered-psd",
-                "Photoshop (.psd)",
-            ),
+            (layered::Format::Psd, "storyboard-layered-psd", "PSD (.psd)"),
         ]
         .into_iter()
         .map(|(format, id, label)| {

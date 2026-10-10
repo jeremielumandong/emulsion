@@ -45,9 +45,9 @@ defaults are isolated by normalized make/model and are not keyed by extension.
 
 ## Interoperability
 
-- Emulsion sidecars, presets, and camera defaults are Emulsion JSON, not Adobe
+- Emulsion sidecars, presets, and camera defaults are Emulsion JSON, not
   XMP. XMP sidecars are neither read nor written.
-- Lightroom `.xmp` and `.lrtemplate` develop presets can be imported as preset
+- XMP (`.xmp`) and `.lrtemplate` develop presets can be imported as preset
   data in the Library; plug-in code is not executed.
 - DNG files are read as RAW sources; Emulsion does not write DNG.
 - Adobe RGB is available as an export color space alongside sRGB.

@@ -7,11 +7,11 @@ built and how to run it.
 
 ### Context
 
-Emulsion is a Rust/GPUI Photoshop-style editor. The canvas currently renders
+Emulsion is a Rust/GPUI layered image editor. The canvas currently renders
 through GPUI, with GPU compute for selected image operations; persistent GPU
 brush painting is experimental and opt-in. Brush performance is already decent,
 but performance is meant to be the key advantage of Emulsion and of two planned
-sibling apps (a Canva-style design editor and a draw.io-style diagram app for
+sibling apps (a template-based design editor and a diagram app for
 Omarchy). Before committing those apps to a stack, measure whether a render loop
 we own (winit + wgpu, Vello for vector content) beats GPUI painting.
 

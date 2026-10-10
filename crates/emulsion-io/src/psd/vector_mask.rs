@@ -1,7 +1,7 @@
 //! Bounded editable PSD vector masks. ag-psd 0.3 deliberately uses unit document
 //! dimensions for paths, so its knot coordinates are normalized, not pixels.
 //!
-//! Adobe documents even-odd path fill. Native masks use nonzero winding. Only
+//! The PSD specification documents even-odd path fill. Native masks use nonzero winding. Only
 //! one provably simple contour (or an empty descriptor) crosses that boundary;
 //! an operation flag alone is not evidence that compound fills are equivalent.
 
@@ -39,7 +39,7 @@ fn properties(layer: &Layer) -> Option<MaskProperties> {
     result.valid().then_some(result)
 }
 
-/// Adobe reserves three guard bits in signed 8.24 path coordinates. Refuse
+/// The PSD format reserves three guard bits in signed 8.24 path coordinates. Refuse
 /// out-of-range points rather than letting the dependency's i32 cast saturate.
 fn normalized_coordinate(value: f64) -> bool {
     value.is_finite() && (-16.0..16.0).contains(&value)

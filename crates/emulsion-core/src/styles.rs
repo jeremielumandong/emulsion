@@ -766,7 +766,7 @@ fn shift(a: &[f32], w: usize, h: usize, dx: i32, dy: i32) -> Vec<f32> {
 }
 
 fn offset(angle: f32, distance: f32) -> (i32, i32) {
-    // Photoshop measures the light's angle; the shadow falls opposite.
+    // The angle is the light's direction (the usual convention); the shadow falls opposite.
     let a = angle.to_radians();
     (
         (-a.cos() * distance).round() as i32,

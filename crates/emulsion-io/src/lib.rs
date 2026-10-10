@@ -183,7 +183,7 @@ pub enum IoError {
 pub type Result<T> = std::result::Result<T, IoError>;
 
 /// Extensions `open` decodes by itself, lower case: the native project,
-/// Photoshop and GIMP documents, the common web and print formats, the
+/// PSD and XCF documents, the common web and print formats, the
 /// `image` crate's wider set (Targa, PNM, icons, Radiance HDR, OpenEXR,
 /// DDS, QOI, farbfeld), JPEG XL, SVG and camera RAW.
 pub const OPEN_EXTENSIONS: &[&str] = &[
@@ -401,7 +401,7 @@ pub fn open_full(path: &Path) -> Result<Opened> {
 }
 
 /// Open a document and return evidence from that same PSD/PSB import, if any.
-/// The report describes a bounded current-appearance decision, not an Adobe
+/// The report describes a bounded current-appearance decision, not a PSD-authoring
 /// gamma preference or future-edit equivalence. Reporting adds no extra decode
 /// or render to the import operation.
 pub fn open_full_with_report(path: &Path) -> Result<(Opened, Option<psd::ReadReport>)> {

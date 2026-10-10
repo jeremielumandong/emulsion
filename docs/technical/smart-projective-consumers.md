@@ -4,7 +4,7 @@ This is the consumer portion of the native Smart mapping cutover. It depends on
 core's authoritative `SmartPlacement` / `Mapping2`, checked support admission and
 fallible document preparation, and on IO's native v16 adapters. It does not expose
 a projective-transform MCP tool, Distort gesture, projective Again recipe, mesh
-Warp, rational vector paths, mask-copy semantics or Photoshop projective parity.
+Warp, rational vector paths, mask-copy semantics or projective parity with other editors.
 
 ## Rendering and publication
 

@@ -140,7 +140,7 @@ const FORMATS: &[(&str, &str, &str)] = &[
     ("xcf", "XCF", "editor.export_ui.help_xcf"),
 ];
 
-/// Formats past the everyday ones, GIMP's list.
+/// Formats past the everyday ones.
 const MORE_FORMATS: &[(&str, &str, &str)] = &[
     ("avif", "AVIF", "editor.export_ui.help_avif"),
     ("heic", "HEIC", "editor.export_ui.help_heic"),

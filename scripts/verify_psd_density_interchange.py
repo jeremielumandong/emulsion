@@ -4,7 +4,7 @@
 Run on NEW_DIRECTORY/density-boundaries from psd_vector_interchange. Uses the
 same Pillow/numpy/psd-tools prerequisites. Reports native f32 bits, independently
 derived half-away density bytes, actual export rounding counts, exact native
-history/source preservation, and mandatory negative controls. No Adobe renderer
+history/source preservation, and mandatory negative controls. No third-party renderer
 or feather parity is claimed. No files in the packet are changed.
 """
 from __future__ import annotations
@@ -238,7 +238,7 @@ def verify(folder):
         result["negative_controls"] = negative_controls(folder, manifest, export)
         results.append(result)
     return {"status": "passed", "reader": {"name": "psd-tools", "version": psd_tools.__version__, "module": psd_tools.__file__},
-            "scope": "Six separate density cases; independent native-f32 byte oracle, raw raster/vector fields, exact native history and sources; saved preview and fresh geometry checked separately; no Adobe renderer parity",
+            "scope": "Six separate density cases; independent native-f32 byte oracle, raw raster/vector fields, exact native history and sources; saved preview and fresh geometry checked separately; no third-party renderer parity",
             "density_expectations": densities, "native_immutability": native, "exports": results}
 
 

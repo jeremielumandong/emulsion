@@ -1,4 +1,4 @@
-//! Portable Emulsion RAW recipes and camera defaults, not Adobe XMP.
+//! Portable Emulsion RAW recipes and camera defaults, not XMP develop settings.
 //!
 //! Reading settings never changes a document. Callers develop the returned
 //! parameters and commit pixels and recipe together with `Command::DevelopRaw`.
@@ -144,7 +144,7 @@ fn read(path: &Path, format: &str) -> Result<SettingsFile> {
     let saved: SettingsFile = serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
     if saved.format != format {
         return Err(invalid(format!(
-            "expected {format}; Adobe XMP is not supported"
+            "expected {format}; XMP develop settings are not supported"
         )));
     }
     if saved.version != VERSION {

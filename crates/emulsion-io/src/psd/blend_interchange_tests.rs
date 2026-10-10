@@ -79,7 +79,7 @@ fn channel_specific_blend_if_metadata_stays_exact_but_renderer_eligibility_is_un
             );
             let parsed = ag_psd::read_psd(&raw, &ReadOptions::default()).unwrap();
             let metadata_only = from_psd(&parsed).unwrap();
-            // Independent Photoshop fixture establishes a 40-byte RGB(A)
+            // Independent third-party PSD fixture establishes a 40-byte RGB(A)
             // table: Gray, R, G, B, neutral fourth channel. Pin actual written
             // bytes rather than merely trusting our importer to agree.
             let mut packet = 40u32.to_be_bytes().to_vec();
@@ -384,7 +384,7 @@ fn opaque_native_bottom_layer_keeps_explicit_transparency_channel() {
             .collect();
         assert!(
             channels.contains(&-1),
-            "an ordinary bottom layer must not become Photoshop Background"
+            "an ordinary bottom layer must not become PSD Background"
         );
     }
 }

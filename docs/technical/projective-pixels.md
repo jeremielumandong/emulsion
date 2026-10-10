@@ -68,8 +68,8 @@ For each document-space output center, the sampler uses
 `floor(log2(max(1, sigma_max(J_inverse) * document_pixels_per_output_pixel)))`,
 clamped to the source plane's available levels. Logarithms are added instead of
 multiplying potentially large footprints. This deterministic isotropic policy
-can blur anisotropic directions; it makes no Photoshop interpolation-equivalence
-claim. Legacy Pixels retain their determinant-based mip rule and all exact-copy
+can blur anisotropic directions; it makes no interpolation-equivalence
+claim with other editors. Legacy Pixels retain their determinant-based mip rule and all exact-copy
 fast paths.
 
 Bilinear interpolation uses linear premultiplied storage. Pixel exterior is

@@ -1668,7 +1668,7 @@ pub fn list(args: &Value) -> Result<ToolResult, ToolResult> {
         .collect();
     Ok(ToolResult::text(json!({"looks":looks, "film_library": film,
         "film_categories": categories,
-        "note":"looks are Emulsion's adaptive looks. film_library holds 451 bundled film and creative presets (peva3/Lightroom-Presets, MIT); search them with query (film names, moods, genres) or category, and apply either kind by name with apply_raw_look. Film presets are translated to Emulsion's renderer, so they can differ from Lightroom."}).to_string()))
+        "note":"looks are Emulsion's adaptive looks. film_library holds 451 bundled film and creative presets (peva3/Lightroom-Presets, MIT); search them with query (film names, moods, genres) or category, and apply either kind by name with apply_raw_look. Film presets are translated to Emulsion's renderer, so they can differ from the original presets."}).to_string()))
 }
 
 pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {

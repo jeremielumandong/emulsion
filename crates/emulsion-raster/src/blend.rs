@@ -1,6 +1,6 @@
 //! Blend modes.
 //!
-//! Every Photoshop mode, implemented with the W3C Compositing formulas:
+//! Every standard layer blend mode, implemented with the W3C Compositing formulas:
 //!
 //! ```text
 //! Cs' = (1 − αb)·Cs + αb·B(Cb, Cs)
@@ -57,13 +57,13 @@ pub enum BlendSpace {
     Linear,
     Srgb,
     /// Encoded-sRGB kernels AND alpha interpolation, with linear pixel storage.
-    /// A versioned native contract; individual Photoshop families need fixtures.
+    /// A versioned native contract; individual PSD blend families need fixtures.
     #[serde(rename = "photoshop-srgb-v1")]
     PhotoshopSrgbV1,
 }
 
 impl BlendMode {
-    /// Photoshop's eight blend modes whose result responds to Fill differently
+    /// The eight PSD blend modes whose result responds to Fill differently
     /// from layer opacity.
     pub fn has_special_fill(self) -> bool {
         matches!(
@@ -79,7 +79,7 @@ impl BlendMode {
         )
     }
 
-    /// Blend kernel with Photoshop Fill semantics. `fill == 0` is the
+    /// Blend kernel with PSD Fill semantics. `fill == 0` is the
     /// identity kernel and `fill == 1` is [`Self::mix`].
     pub fn mix_fill(self, cb: [f32; 3], cs: [f32; 3], fill: f32) -> [f32; 3] {
         let f = fill.clamp(0.0, 1.0);
@@ -116,7 +116,7 @@ impl BlendMode {
         [one(cb[0], cs[0]), one(cb[1], cs[1]), one(cb[2], cs[2])]
     }
 
-    /// Modes in menu order, with separators between Photoshop's groups
+    /// Modes in menu order, with separators between the conventional groups
     /// expressed as `None`.
     pub const MENU: &'static [Option<BlendMode>] = &[
         Some(BlendMode::Normal),
@@ -222,7 +222,7 @@ impl BlendMode {
         }
     }
 
-    /// Parse an ORA `composite-op`, accepting the Krita names too.
+    /// Parse an ORA `composite-op`, accepting the vendor-prefixed extension names too.
     pub fn from_ora_op(op: &str) -> Option<BlendMode> {
         use BlendMode::*;
         let all = [
@@ -531,7 +531,7 @@ pub fn blend_px(
     o
 }
 
-/// Composite with Photoshop's special Fill behavior. `coverage` is layer
+/// Composite with the PSD special Fill behavior. `coverage` is layer
 /// opacity/mask/clipping coverage and deliberately excludes Fill.
 pub fn blend_px_fill(
     mode: BlendMode,
@@ -612,7 +612,7 @@ pub(crate) fn decode_premul(p: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// The Photoshop-sRGB-v1 interpolation contract. Endpoints retain exact storage.
+/// The PSD-compatible sRGB v1 interpolation contract. Endpoints retain exact storage.
 #[inline]
 pub(crate) fn photoshop_mix(before: [f32; 4], after: [f32; 4], k: f32) -> [f32; 4] {
     if k <= 0.0 {
@@ -660,7 +660,7 @@ fn photoshop_blend_px(mode: BlendMode, dst: [f32; 4], src: [f32; 4], noise: f32)
 }
 
 /// Existing special-Fill kernels, composed in the new profile's coordinates.
-/// This defines native behavior; it is not independent Photoshop calibration.
+/// This defines native behavior; it is not independent calibration against PSD reference renders.
 fn photoshop_blend_px_fill(
     mode: BlendMode,
     dst: [f32; 4],

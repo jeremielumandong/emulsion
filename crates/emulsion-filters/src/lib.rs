@@ -1813,7 +1813,7 @@ mod photo {
         blur(&ab, w, h, sigma)
     }
 
-    /// Luminar-style "Accent AI": adaptive black/white points, shadow lift,
+    /// One-slider "Accent AI" enhancement: adaptive black/white points, shadow lift,
     /// highlight recovery, an S-curve, local contrast over 1% of the shorter
     /// side, vibrance that spares skin hues, and an optional sky boost.
     pub(super) fn enhance(img: &Image, amount: f32, sky: f32) -> Image {

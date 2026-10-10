@@ -529,7 +529,7 @@ impl EditorView {
             && self.warp.is_none()
     }
 
-    /// Photoshop's Ctrl+Alt+G releases the selected Photo layer and the
+    /// In Photo, Ctrl+Alt+G releases the selected Photo layer and the
     /// consecutive clipped siblings above it that share the same base.
     /// Explicit clip links in Paint/Design retain their single-node semantics.
     pub(crate) fn toggle_clipping_mask(&mut self, cx: &mut Context<Self>) {

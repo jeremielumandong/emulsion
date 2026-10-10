@@ -196,7 +196,7 @@ connected shapes, clamped to 2–10,000, instead of the default layered canvas).
 Opt-in ignored tests and tools read a local path:
 `EMULSION_LIBRARY_RAW_SAMPLES` (a folder of at least two local RAW files, such as Nikon D90 samples, for the
 shared RAW memory-budget regression in `crates/emulsion-io/tests/raw_development.rs`),
-`EMULSION_CHIC_PRESET` (a user-provided `Chic.xmp` for the Lightroom preset import
+`EMULSION_CHIC_PRESET` (a user-provided `Chic.xmp` for the XMP develop-preset import
 regression in `crates/emulsion-io/src/lightroom_presets.rs`), and
 `EMULSION_AUDIT_RETRY_JSONL` (a previous `drawio_audit` JSONL report; the
 `crates/emulsion-io/examples/drawio_audit.rs` example then reruns only the files

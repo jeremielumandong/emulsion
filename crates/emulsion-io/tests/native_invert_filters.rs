@@ -336,7 +336,7 @@ fn unknown_v14_filters_and_malformed_downgraded_history_cannot_be_recovered_away
         assert_eq!(entry(&path, HISTORY)["version"], json!(version));
         let details: &[&str] = if version == 13 {
             &[
-                "Photoshop compositing or Invert state requires native and existing history version 14",
+                "PSD-compatible compositing or Invert state requires native and existing history version 14",
             ]
         } else {
             &[

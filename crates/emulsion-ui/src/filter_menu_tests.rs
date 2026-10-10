@@ -231,7 +231,7 @@ fn image_blend_profiles_are_distinct_discoverable_and_undoable(cx: &mut TestAppC
             );
             window.within("popup-menu").hover(6usize, cx);
             window.press("right", cx);
-            for (index, label) in ["sRGB (legacy)", "Linear light", "Photoshop sRGB v1"]
+            for (index, label) in ["sRGB (legacy)", "Linear light", "PSD-compatible sRGB v1"]
                 .into_iter()
                 .enumerate()
             {
@@ -267,11 +267,11 @@ fn image_background_menu_sets_clears_and_undoes_explicit_identity(cx: &mut TestA
         window.click("image-menu", cx);
         assert_eq!(
             window.within("popup-menu").find(8usize).label(),
-            Some("Set Photoshop Background")
+            Some("Set PSD Background")
         );
         assert_eq!(
             window.within("popup-menu").find(9usize).label(),
-            Some("Clear Photoshop Background")
+            Some("Clear PSD Background")
         );
         // Clearing without an assignment is disabled.
         window.within("popup-menu").click(9usize, cx);

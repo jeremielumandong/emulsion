@@ -27,7 +27,7 @@ preflight filter metadata before raster allocation and reject downgraded Invert
 records or unknown v14 filters instead of discarding the history.
 
 This is a native prerequisite. It does not implement PSD `filterFX` or `FEid`
-interchange, or establish editable Photoshop Smart Filter/mask compatibility.
+interchange, or establish editable PSD Smart Filter/mask compatibility.
 
 ## Focused verification
 

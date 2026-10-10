@@ -8,7 +8,7 @@ Requires Pillow and psd-tools 1.23.0 or later. A source installation can be used
 
 Checks raw user-mask (-2) pixels, independent bounds, standard parameters/flags,
 unchanged layer pixels and the saved merged preview. Does not composite layers,
-compare different feather kernels, or claim Photoshop rendering verification.
+compare different feather kernels, or claim third-party rendering verification.
 """
 from __future__ import annotations
 
@@ -152,7 +152,7 @@ def main() -> None:
     report = {
         "status": "passed",
         "reader": {"name": "psd-tools", "version": psd_tools.__version__, "module": psd_tools.__file__},
-        "scope": "Stored editable -2 raster masks, layer pixels and opaque saved preview; no Photoshop rendering or feather-kernel parity claim",
+        "scope": "Stored editable -2 raster masks, layer pixels and opaque saved preview; no third-party rendering or feather-kernel parity claim",
         "exports": [verify_export(args.directory, manifest, export) for export in manifest["exports"]],
     }
     text = json.dumps(report, indent=2) + "\n"

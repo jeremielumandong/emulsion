@@ -85,7 +85,7 @@ The brush panel (**Brush settings**) has five tabs:
 **Scatter** (Dynamics tab, or Brush Studio's Stroke Path page) offsets each dab
 at random by up to that fraction of the brush size. In Brush Studio's Shape
 page, **Stamp count** stamps 1 to 16 dabs at each step and **Count jitter**
-randomly drops some of them, Storyboard Pro's stamp randomization. Both are
+randomly drops some of them, the conventional stamp randomization. Both are
 saved with the brush, and a stroke replays the same dabs every time.
 
 Choose **Brush settings ▾** on the options bar, or right-click the canvas, for

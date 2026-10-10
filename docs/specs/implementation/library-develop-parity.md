@@ -1,6 +1,6 @@
 # Library and Develop implementation ledger
 
-This ledger tracks the requested desktop Library/Develop layout and the feature audit. A check records the bounded implementation described in the guide, with UI, shared renderer/persistence, MCP where applicable, and relevant validation. Remaining limits are tracked separately; a check does not imply every Lightroom behavior is reproduced. It is not a claim of Adobe rendering equivalence.
+This ledger tracks the requested desktop Library/Develop layout and the feature audit. A check records the bounded implementation described in the guide, with UI, shared renderer/persistence, MCP where applicable, and relevant validation. Remaining limits are tracked separately; a check does not imply every behavior of other photo editors is reproduced. It is not a claim of third-party rendering equivalence.
 
 - [x] Module layout: central canvas, Navigator/presets/history left, histogram/tools/adjustments right, full-width filmstrip, hideable panels.
 - [x] Bounded reusable RAW processing cache, cancellation, fit and detail previews.

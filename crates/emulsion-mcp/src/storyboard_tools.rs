@@ -13,7 +13,7 @@
 //! `animatic`; reference video tracks in `video`; scene cameras, layer keyframes, layer comps and keyframe sync
 //! in `animation`; script and PDF imports and the spelling check in
 //! `script`; the assistant's script breakdown and duration estimates in
-//! `breakdown`; EDL, Final Cut XML and OpenTimelineIO export and conform in
+//! `breakdown`; EDL, XML edit list (xmeml) and OpenTimelineIO export and conform in
 //! `editorial`; board versions, change tracking, Compare and review notes
 //! in `review`; shared projects (claims, waiting saves, merging a cloud
 //! revision) in `sharing`; AI image operations on panels in `ai`. Drawing, duplicating ("next frame") and

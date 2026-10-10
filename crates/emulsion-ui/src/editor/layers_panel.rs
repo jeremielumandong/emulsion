@@ -162,7 +162,7 @@ impl EditorView {
         self.execute_layer_commands("Layer blend mode", commands, cx);
     }
 
-    /// Photoshop's Shift+Alt+letter: one blend mode for the selected layers.
+    /// Shift+Alt+letter: one blend mode for the selected layers.
     pub(crate) fn set_layer_blend(&mut self, blend: BlendMode, cx: &mut Context<Self>) {
         let commands: Vec<_> = self
             .selected_layer_ids()

@@ -42,7 +42,7 @@ development.
 | **Content libraries** | Recipes, presets, smart collections | Recipes | 55 built-in brushes in 10 categories | Templates, components, brand kits | 92 native stencils, 42 draw.io families, 55 AWS/Azure icon packs |
 | **Local AI** | Subject and sky masks, depth map | Select subject, Remove, generative fill | Assistant drawing | Assistant layout | Assistant and generation from data |
 | **Merge and repair** | HDR merge, panorama stitch, lens profiles, highlight reconstruction | Heal, Clone stamp, Liquify, Warp | QuickShape, drawing guides and Drawing Assist | Vector point editing, Boolean operations | Auto-layout (4 layouts) |
-| **Import** | RAW and common images, Lightroom presets and catalogs | Common images, PSD/PSB, XCF, and camera RAW through Library | `.ora`, brushes (`.brush`, `.brushset`, `.brushlibrary`, `.abr`, `.embrushes`) | PowerPoint, Lottie | draw.io, Visio, Lucid |
+| **Import** | RAW and common images, XMP develop presets and photo catalogs | Common images, PSD/PSB, XCF, and camera RAW through Library | `.ora`, brushes (`.brush`, `.brushset`, `.brushlibrary`, `.abr`, `.embrushes`) | PowerPoint, Lottie | draw.io, Visio, Lucid |
 | **Export** | Batch export with presets | PNG, JPEG, WebP, TIFF, layered PSD and XCF, and more | Same as Photo, plus animation and replay GIF | PowerPoint, HTML, Lottie, PDF, SVG, PNG, JPEG | draw.io, PDF, SVG, PNG, JPEG |
 | **Native file** | `<photo>.emulsion-raw.json` sidecar beside the original | `.ora` | `.ora` | `.emu` | `.emu` |
 | **Pen pressure** | — | Yes | Yes (Windows, macOS, Linux) | — | — |

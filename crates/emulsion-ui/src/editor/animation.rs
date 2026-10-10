@@ -5,7 +5,7 @@
 //! the previous one in), steps through them, and exports a GIF. Nothing
 //! is written to the document: the preview swaps the render tree only.
 //!
-//! Replay: the drawing played back from history, like Procreate's
+//! Replay: the drawing played back from history, like a painting app's
 //! time-lapse but with nothing recorded up front. Every commit on the head
 //! branch (the file's root, each save and export) and every undo step still
 //! held is a moment of the picture; replay renders them small, oldest

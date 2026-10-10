@@ -57,7 +57,7 @@ pub(crate) fn check_filters_version(version: u32, filters: &[Filter]) -> Result<
 pub(crate) fn check_version(version: u32, space: BlendSpace, target: Option<NodeId>) -> Result<()> {
     if version < 14 && requires_v14(space, target) {
         return Err(error(
-            "Photoshop profile and Background metadata require native/history version 14",
+            "PSD-compatible profile and Background metadata require native/history version 14",
         ));
     }
     Ok(())
@@ -198,7 +198,7 @@ impl Doc {
         }
         if requires_v14(self.blend_space, self.psd_background) && (native < 14 || history < 14) {
             return Err(error(
-                "Photoshop profile and Background metadata require native and history version 14",
+                "PSD-compatible profile and Background metadata require native and history version 14",
             ));
         }
         if let Some(id) = self.psd_background {
@@ -212,7 +212,7 @@ impl Doc {
                 && self.nodes.iter().filter(|node| node.id == id).count() == 1;
             if !valid {
                 return Err(error(
-                    "Invalid Photoshop Background target: expected a unique bottom root raster without a clip link",
+                    "Invalid PSD Background target: expected a unique bottom root raster without a clip link",
                 ));
             }
         }

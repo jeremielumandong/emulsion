@@ -20,11 +20,11 @@ use std::time::{Duration, Instant, SystemTime};
 /// The file format the panel goes out as.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EditFormat {
-    /// Layered Photoshop document, read by Photoshop, Krita, GIMP,
-    /// Affinity and most painting apps.
+    /// Layered PSD document, read by most image editors and painting
+    /// apps.
     #[default]
     Psd,
-    /// OpenRaster, Krita's and MyPaint's exchange format.
+    /// OpenRaster, the open layered exchange format.
     Ora,
 }
 
@@ -347,7 +347,7 @@ pub fn adopt_layers(current: &Document, external: &Document) -> crate::Result<Do
     // Transfer only the external document's explicit role, never a reused name/ID.
     doc.psd_background = ext.psd_background.and_then(|id| map.get(&id).copied());
     // Keep established Linear/sRGB external-edit behavior. Entering or leaving
-    // the versioned Photoshop profile adopts the external scene's profile too.
+    // the versioned PSD-compatible profile adopts the external scene's profile too.
     if current.blend_space == emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1
         || ext.blend_space == emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1
     {
@@ -450,7 +450,7 @@ mod tests {
 
     fn start(p: &ProjectEditor, format: EditFormat, root: &Path) -> ExternalEdit {
         let doc = p.page(1).unwrap().doc.clone();
-        ExternalEdit::start(1, "Panel 1/A", doc, format, root, "Krita").unwrap()
+        ExternalEdit::start(1, "Panel 1/A", doc, format, root, "PaintApp").unwrap()
     }
 
     /// What the external app does: read the file, add a layer, double the
@@ -638,7 +638,7 @@ mod tests {
                 EditFormat::Psd
             };
             let mut edit =
-                ExternalEdit::start(1, "Panel", doc, format, root.path(), "Krita").unwrap();
+                ExternalEdit::start(1, "Panel", doc, format, root.path(), "PaintApp").unwrap();
             let expected = match case {
                 "flattened" => Some(WriteReport {
                     appearance_fallback: Some(AppearanceFallback::UnsupportedFeatures),
@@ -673,7 +673,7 @@ mod tests {
         // Invalid input fails validation inside the write, after its folder exists.
         doc.width = 0;
         assert!(
-            ExternalEdit::start(1, "Panel", doc, EditFormat::Psd, root.path(), "Krita").is_err()
+            ExternalEdit::start(1, "Panel", doc, EditFormat::Psd, root.path(), "PaintApp").is_err()
         );
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
         assert!(
@@ -717,7 +717,7 @@ mod tests {
             let panel = &p.storyboard().unwrap().panels[&1];
             assert!(panel.motion.contains_key(&ink));
             assert_eq!(panel.frames, 30);
-            assert_eq!(p.history.steps().next().unwrap().name, "Edit in Krita");
+            assert_eq!(p.history.steps().next().unwrap().name, "Edit in PaintApp");
             assert!(p.undo());
             assert!(!names(&p.page(1).unwrap().doc).contains(&"Shading".to_string()));
             assert_eq!(p.storyboard().unwrap().panels[&1].frames, 30);
@@ -752,7 +752,7 @@ mod tests {
         );
         let both = names(&p.page(1).unwrap().doc);
         assert!(both.contains(&"Mine".to_string()));
-        assert!(both.contains(&"Shading (Krita)".to_string()), "{both:?}");
+        assert!(both.contains(&"Shading (PaintApp)".to_string()), "{both:?}");
         assert!(both.contains(&"Ink".to_string()));
         assert!(p.undo());
 
@@ -818,7 +818,7 @@ mod tests {
         // would exceed the padded side limit, so no candidate can be published.
         for result in [
             adopt_layers(&current, &external),
-            stack_layers(&current, &external, "Krita"),
+            stack_layers(&current, &external, "PaintApp"),
         ] {
             assert!(matches!(result, Err(crate::IoError::Command(_))));
         }
@@ -838,7 +838,7 @@ mod tests {
         let supported = Document::new(29_993, 1);
         for result in [
             adopt_layers(&supported, &external),
-            stack_layers(&supported, &external, "Krita"),
+            stack_layers(&supported, &external, "PaintApp"),
         ] {
             let candidate = result.unwrap();
             candidate.validate().unwrap();
@@ -892,7 +892,7 @@ mod tests {
             let graph = project.page(1).unwrap().graph.clone();
             let mut edit = ExternalEdit {
                 panel: 1,
-                app: "Krita".into(),
+                app: "PaintApp".into(),
                 format: EditFormat::Ora,
                 dir,
                 path: path.clone(),
@@ -958,7 +958,7 @@ mod tests {
             );
             assert_eq!(
                 project.history.steps().next().unwrap().name,
-                "Edit in Krita"
+                "Edit in PaintApp"
             );
             assert!(Arc::ptr_eq(
                 retained_source(&project.page(1).unwrap().doc),

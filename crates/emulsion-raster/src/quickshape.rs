@@ -1,8 +1,8 @@
 //! QuickShape: fit a hand-drawn stroke to the shape it was aiming for. A
 //! wobbly line becomes straight, a rough loop a circle or ellipse, a
 //! lumpy triangle a triangle. The fit is geometric and cheap; the caller
-//! decides when to invoke it (Procreate snaps when the pen is held still
-//! at the end of the stroke).
+//! decides when to invoke it (typically when the pen is held still at the
+//! end of the stroke).
 
 /// A fitted shape, in the same pixel space as the input points.
 #[derive(Clone, Debug, PartialEq)]

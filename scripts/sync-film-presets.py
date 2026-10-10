@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Import the MIT-licensed peva3/Lightroom-Presets library into Emulsion.
 
-Copies every Adobe Camera Raw `.xmp` preset into
+Copies every XMP develop-settings (crs) `.xmp` preset into
 `assets/develop-presets/film-library/<Category>/`, keeps the upstream license,
 and regenerates `crates/emulsion-io/src/film_library_index.rs`, which embeds
 each preset with its category and the upstream one-line description.
@@ -63,12 +63,12 @@ def main() -> None:
     shutil.copy(src / "LICENSE", DEST / "LICENSE")
     (DEST / "SOURCE.md").write_text(
         "# Film preset library\n\n"
-        "Adobe Camera Raw `.xmp` presets from "
+        "XMP develop-settings (crs) `.xmp` presets from "
         "[peva3/Lightroom-Presets](https://github.com/peva3/Lightroom-Presets), "
         f"commit `{commit}`, MIT License (see `LICENSE`).\n\n"
         "Copied unmodified by `scripts/sync-film-presets.py`, which also generates "
         "`crates/emulsion-io/src/film_library_index.rs`. Emulsion translates them "
-        "to its own renderer; the appearance can differ from Lightroom.\n",
+        "to its own renderer; the appearance can differ from the original application.\n",
         encoding="utf-8",
     )
 

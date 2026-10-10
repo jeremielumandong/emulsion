@@ -1,6 +1,6 @@
 # Independent stored-encoded-RGB Smart stack-mask oracle
 
-These four arrays (20,800 bytes) come from two independent Photoshop-authored
+These four arrays (20,800 bytes) come from two independently authored PSD
 captures in [Patchy at 20f95a201c395213ce3e212f13d912e418d1cba6](https://github.com/SethRobinson/Patchy/tree/20f95a201c395213ce3e212f13d912e418d1cba6).
 `manifest.json` pins both source URLs/SHA-256s and every derived array SHA-256.
 The original PSDs are not redistributed here.
@@ -10,11 +10,11 @@ The original PSDs are not redistributed here.
 The repository's [MIT license](https://github.com/SethRobinson/Patchy/blob/20f95a201c395213ce3e212f13d912e418d1cba6/LICENSE)
 is copyright 2026 Seth A. Robinson, with no fixture/image exclusion. The exact
 notice is `LICENSE.Patchy`. The [legal constraints](https://github.com/SethRobinson/Patchy/blob/20f95a201c395213ce3e212f13d912e418d1cba6/docs/legal-constraints.md)
-identify these regression assets as self-authored, not Adobe artwork.
+identify these regression assets as self-authored, not vendor-supplied artwork.
 [Capture introduction 52091ed6681326e93dae41fd7c4bafc3b3c2832e](https://github.com/SethRobinson/Patchy/commit/52091ed6681326e93dae41fd7c4bafc3b3c2832e)
-says the Smart Filter captures were authored/reopened in Photoshop 27.8;
-independent XMP reads report Photoshop 27.8 (Windows). This is upstream
-provenance, not a new local Photoshop acceptance run.
+says the Smart Filter captures were authored/reopened in the reference PSD editor, version 27.8;
+independent XMP reads report creator tool 27.8 (Windows). This is upstream
+provenance, not a new local reference-editor acceptance run.
 
 ## What is measured
 
@@ -54,7 +54,7 @@ storage. Its input/storage/output quantization stays within the declared bound.
 
 Native Gaussian rendering, nonuniform resize, arbitrary filter blend/opacity,
 linked mask movement, density/feather, outside-canvas mask semantics, editable
-PSD Smart Filter import/export, and newly authored Photoshop acceptance are
+PSD Smart Filter import/export, and newly authored reference-editor acceptance are
 not established by this test. The native test deliberately injects both cache
 inputs rather than regenerating them with an unverified filter or resize.
 
@@ -69,7 +69,7 @@ python3 extract.py --inputs /path/to/pinned-psds --output /tmp/mask-oracle
 
 The independent reader checks source hashes, placed UUID association, untagged
 profile, actual unmasked raster target, and all four derived hashes. It does
-not invoke Emulsion or Patchy's parser/renderer, Photoshop, a Gaussian kernel,
+not invoke Emulsion or Patchy's parser/renderer, the authoring editor, a Gaussian kernel,
 a resizer, or a downloader. Rust tests embed the checked-in arrays and need no
 Python dependency or network. See `smart_filter_mask_space_tests.rs` for the
 final-pixel comparisons, negative controls and separate native micro-oracles.

@@ -637,8 +637,8 @@ pub fn fetch(url: &str) -> Result<String, String> {
         .map_err(|e| format!("{url}: {e}"))
 }
 
-/// A recipe from a Lightroom / Camera Raw develop preset (`.xmp`).
-/// Camera-Raw sliders map onto the recipe's tone, colour, grain, vignette
+/// A recipe from an XMP develop preset (`.xmp`, `crs:` namespace).
+/// The develop sliders map onto the recipe's tone, colour, grain, vignette
 /// and split-toning fields; what has no counterpart is listed.
 pub fn from_xmp(xml: &str) -> (Recipe, Vec<String>) {
     let mut r = Recipe::default();
@@ -661,7 +661,7 @@ pub fn from_xmp(xml: &str) -> (Recipe, Vec<String>) {
         r.highlight = (v / 25.0).clamp(-4.0, 4.0);
     }
     if let Some(v) = get("crs:Shadows2012").or_else(|| get("crs:Shadows")) {
-        // Lifting shadows in Lightroom is a negative shadow tone on Fuji.
+        // Lifting shadows in an XMP preset is a negative shadow tone on Fuji.
         r.shadow = (-v / 25.0).clamp(-4.0, 4.0);
     }
     if let Some(v) = get("crs:Blacks2012") {
@@ -749,7 +749,7 @@ pub fn from_xmp(xml: &str) -> (Recipe, Vec<String>) {
             unknown.push(k.trim_start_matches("crs:").to_string());
         }
     }
-    r.tags.push("lightroom".into());
+    r.tags.push("xmp".into());
     (r, unknown)
 }
 
