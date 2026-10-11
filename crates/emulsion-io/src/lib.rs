@@ -73,6 +73,7 @@ pub mod photo_develop;
 pub mod photo_export;
 pub mod photo_index;
 pub mod photo_proxy;
+pub mod photo_timelapse;
 pub mod pptx;
 pub mod printing;
 pub mod project;

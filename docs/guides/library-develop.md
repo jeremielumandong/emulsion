@@ -477,6 +477,32 @@ conservative and reference-based. These are Emulsion algorithms, not another ven
 MCP provides `merge_library_hdr` (preview or new output path), `cancel_library_hdr`,
 and `get_library.hdr_busy`. Existing outputs are never overwritten.
 
+### Timelapse from photos
+
+Select two or more photos, then **Timelapse…** to turn them into a movie or GIF,
+for example a daily self-portrait series, a construction site or a sky shot
+every few seconds. Each photo is developed with its own Library settings, so
+crop, exposure and colour edits carry into the movie.
+
+- **Format**: H.264 MP4, ProRes MOV or a looping GIF. Movies need FFmpeg on
+  `PATH`; GIFs are at most 1920 pixels wide and 6000 frames.
+- **Size** and **Shape**: the width, and the first photo's shape or 16:9, 9:16 or 1:1.
+- **Frames per second**, **Frames per photo** and **Cross-fade frames** set the
+  pace: 24 fps with 3 frames per photo shows 8 photos a second. Cross-fades add
+  blended frames between photos. The dialog shows the resulting length.
+- **Framing**: **Fill** crops each photo to cover the frame, **Fit** shows all of
+  it with black bars, and **Align faces** turns, scales and moves each photo so the
+  eyes of its most prominent face land level in the same place every frame, the
+  usual look for face-a-day timelapses. **Face size** sets how far apart the eyes
+  sit. Align faces needs the face detector from **Settings → Models**; photos where
+  no face is found are filled and counted in the result.
+- **Order**: EXIF capture time (then file name), file name, or the order shown in
+  the grid.
+
+Photos are developed one at a time while the movie is written, so long series do
+not need to fit in memory. The file is written beside its destination and replaces
+it only when complete; **Cancel** leaves any existing file untouched.
+
 ### Additional photo processing
 
 In **Enhance**, enable **Interruptible RAW reconstruction** for older RAW recipes,

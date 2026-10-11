@@ -19,6 +19,7 @@ mod printing;
 mod profiles;
 mod recipe_previews;
 mod rotation;
+mod timelapse;
 
 use crate::file_prompt::FilePrompts;
 use crate::theme;

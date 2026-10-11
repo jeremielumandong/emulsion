@@ -43,6 +43,7 @@ impl Workspace {
                         this.library_hdr_dialog(window, cx, false)
                     })),
             )
+            .child(self.library_timelapse_button(cx))
             .into_any_element()
     }
     fn library_hdr_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>, panorama: bool) {
