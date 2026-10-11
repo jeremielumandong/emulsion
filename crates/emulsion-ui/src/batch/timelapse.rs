@@ -11,7 +11,7 @@ impl Workspace {
             .label(t!("library.timelapse.button"))
             .small()
             .ghost()
-            .disabled(count < 2 || count > photo_timelapse::MAX_PHOTOS)
+            .disabled(!(2..=photo_timelapse::MAX_PHOTOS).contains(&count))
             .on_click(cx.listener(|this, _, window, cx| this.library_timelapse_dialog(window, cx)))
             .into_any_element()
     }
